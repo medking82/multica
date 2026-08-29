@@ -115,10 +115,10 @@ function typeFromKeyDown(editor: Editor, text: string): void {
 /** Keep ProseMirror's stale AllSelection while moving only the live DOM caret. */
 function placeDomCaretAtStart(editor: Editor): void {
   editor.view.dom.focus();
-  const paragraph = editor.view.dom.querySelector("p");
-  if (!paragraph) throw new Error("expected an editor paragraph");
   const range = document.createRange();
-  range.setStart(paragraph, 0);
+  // Chrome anchors the caret on the contenteditable root after it removes the
+  // selected slash; the schema-preserved empty paragraph is still its child.
+  range.setStart(editor.view.dom, 0);
   range.collapse(true);
   const selection = window.getSelection();
   selection?.removeAllRanges();
