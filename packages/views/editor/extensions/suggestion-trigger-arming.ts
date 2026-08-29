@@ -1,6 +1,7 @@
 import { Extension, type Editor } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import type { EditorView } from "@tiptap/pm/view";
 
 /**
  * Records that the user *typed* a suggestion trigger character, so a picker can
@@ -32,9 +33,11 @@ import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
  * input — paste goes through `handlePaste`/`doPaste` and drop through
  * `handleDrop`, neither of which reaches it. Chrome has one exception: after a
  * handled select-all/delete in a contenteditable, the next printable key can be
- * reconciled from the DOM without calling `handleTextInput`. `handleKeyDown`
- * supplies that missing provenance; the following transaction must still prove
- * that the trigger character was actually inserted before it is armed.
+ * reconciled from the DOM without calling `handleTextInput`. A raw
+ * `handleDOMEvents.keydown` hook supplies that missing provenance even when
+ * ProseMirror skips its higher-level `handleKeyDown` chain; the following
+ * transaction must still prove that the trigger character was actually
+ * inserted before it is armed.
  *
  * Typing a trigger character arms its document position. The pickers' `shouldShow`
  * then opens only for a match anchored at the armed position. Anything the user
@@ -74,6 +77,38 @@ function lastTriggerIndex(text: string): number {
 function stillHoldsTrigger(doc: ProseMirrorNode, pos: number): boolean {
   if (pos < 0 || pos + 1 > doc.content.size) return false;
   return TRIGGER_CHARS.has(doc.textBetween(pos, pos + 1));
+}
+
+/**
+ * Position where a printable key will replace/insert text according to the
+ * browser's live selection.
+ *
+ * After Chrome handles select-all + Backspace, the DOM caret is already back
+ * inside the empty paragraph while ProseMirror can still expose an
+ * `AllSelection` at position 0 until its DOM observer reconciles. The next key
+ * is inserted at position 1, so arming from `view.state.selection.from` would
+ * record the wrong position and reject a genuine trigger.
+ */
+function domInsertionPosition(view: EditorView): number {
+  const fallback = view.state.selection.from;
+  const selection = view.dom.ownerDocument.getSelection();
+  if (!selection?.anchorNode || !selection.focusNode) return fallback;
+  if (
+    !view.dom.contains(selection.anchorNode) ||
+    !view.dom.contains(selection.focusNode)
+  ) {
+    return fallback;
+  }
+
+  try {
+    const anchor = view.posAtDOM(selection.anchorNode, selection.anchorOffset, -1);
+    const focus = view.posAtDOM(selection.focusNode, selection.focusOffset, -1);
+    return Math.min(anchor, focus);
+  } catch {
+    // A transient detached DOM node must not break typing. The following
+    // document-change verification still rejects a mismatched fallback.
+    return fallback;
+  }
 }
 
 export const SuggestionTriggerArmingExtension = Extension.create({
@@ -150,22 +185,25 @@ export const SuggestionTriggerArmingExtension = Extension.create({
         },
 
         props: {
-          handleKeyDown(view, event) {
-            // `handleTextInput` remains authoritative for IME and modified-key
-            // layouts. This fallback is only for an unmodified printable
-            // trigger that Chrome may commit through DOM reconciliation.
-            if (
-              !event.isComposing &&
-              !event.ctrlKey &&
-              !event.metaKey &&
-              !event.altKey &&
-              TRIGGER_CHARS.has(event.key)
-            ) {
-              pendingArm = view.state.selection.from;
-            } else {
-              pendingArm = null;
-            }
-            return false;
+          handleDOMEvents: {
+            keydown(view, event) {
+              // `handleTextInput` remains authoritative for IME and
+              // modified-key layouts. This raw fallback is only for an
+              // unmodified printable trigger that Chrome may commit through
+              // DOM reconciliation.
+              if (
+                !event.isComposing &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.altKey &&
+                TRIGGER_CHARS.has(event.key)
+              ) {
+                pendingArm = domInsertionPosition(view);
+              } else {
+                pendingArm = null;
+              }
+              return false;
+            },
           },
           handleTextInput(_view, from, _to, text) {
             const index = lastTriggerIndex(text);

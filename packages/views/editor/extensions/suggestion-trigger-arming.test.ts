@@ -112,6 +112,19 @@ function typeFromKeyDown(editor: Editor, text: string): void {
   }
 }
 
+/** Keep ProseMirror's stale AllSelection while moving only the live DOM caret. */
+function placeDomCaretAtStart(editor: Editor): void {
+  editor.view.dom.focus();
+  const paragraph = editor.view.dom.querySelector("p");
+  if (!paragraph) throw new Error("expected an editor paragraph");
+  const range = document.createRange();
+  range.setStart(paragraph, 0);
+  range.collapse(true);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+}
+
 function picker(editor: Editor, pluginKey: PluginKey = key) {
   const state = pluginKey.getState(editor.state);
   return { active: state?.active, query: state?.query };
@@ -229,7 +242,8 @@ describe("suggestion trigger arming", () => {
 
       editor.commands.selectAll();
       editor.commands.deleteSelection();
-      editor.commands.focus("end");
+      placeDomCaretAtStart(editor);
+      expect(editor.state.selection.toJSON().type).toBe("all");
       expect(picker(editor, slashKey).active).toBe(false);
 
       typeFromKeyDown(editor, "/");
