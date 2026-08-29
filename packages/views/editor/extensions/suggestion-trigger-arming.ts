@@ -33,11 +33,11 @@ import type { EditorView } from "@tiptap/pm/view";
  * input — paste goes through `handlePaste`/`doPaste` and drop through
  * `handleDrop`, neither of which reaches it. Chrome has one exception: after a
  * handled select-all/delete in a contenteditable, the next printable key can be
- * reconciled from the DOM without calling `handleTextInput`. A raw
- * `handleDOMEvents.keydown` hook supplies that missing provenance even when
- * ProseMirror skips its higher-level `handleKeyDown` chain; the following
- * transaction must still prove that the trigger character was actually
- * inserted before it is armed.
+ * reconciled from the DOM without calling `handleTextInput`. A native capture
+ * listener on the editor DOM supplies that missing provenance even when
+ * ProseMirror skips its own event-routing chain; the following transaction
+ * must still prove that the trigger character was actually inserted before it
+ * is armed.
  *
  * Typing a trigger character arms its document position. The pickers' `shouldShow`
  * then opens only for a match anchored at the armed position. Anything the user
@@ -136,10 +136,39 @@ export const SuggestionTriggerArmingExtension = Extension.create({
     // consumed by the very next `apply`. Holds a position in the NEW document:
     // text typed at `from` puts its i-th character at `from + i`.
     let pendingArm: number | null = null;
+    const recordKeyDown = (view: EditorView, event: KeyboardEvent) => {
+      // `handleTextInput` remains authoritative for IME and modified-key
+      // layouts. This raw fallback is only for an unmodified printable trigger
+      // that Chrome may commit through DOM reconciliation.
+      if (
+        !event.isComposing &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        TRIGGER_CHARS.has(event.key)
+      ) {
+        pendingArm = domInsertionPosition(view);
+      } else {
+        pendingArm = null;
+      }
+    };
 
     return [
       new Plugin<number | null>({
         key: new PluginKey("suggestionTriggerArming"),
+
+        view(view) {
+          // ProseMirror can decline a keydown when its state selection is
+          // temporarily behind the browser DOM selection. Capture on the DOM
+          // itself so provenance survives that exact reconciliation gap.
+          const onKeyDown = (event: KeyboardEvent) => recordKeyDown(view, event);
+          view.dom.addEventListener("keydown", onKeyDown, true);
+          return {
+            destroy() {
+              view.dom.removeEventListener("keydown", onKeyDown, true);
+            },
+          };
+        },
 
         state: {
           init() {
@@ -197,26 +226,6 @@ export const SuggestionTriggerArmingExtension = Extension.create({
         },
 
         props: {
-          handleDOMEvents: {
-            keydown(view, event) {
-              // `handleTextInput` remains authoritative for IME and
-              // modified-key layouts. This raw fallback is only for an
-              // unmodified printable trigger that Chrome may commit through
-              // DOM reconciliation.
-              if (
-                !event.isComposing &&
-                !event.ctrlKey &&
-                !event.metaKey &&
-                !event.altKey &&
-                TRIGGER_CHARS.has(event.key)
-              ) {
-                pendingArm = domInsertionPosition(view);
-              } else {
-                pendingArm = null;
-              }
-              return false;
-            },
-          },
           handleTextInput(_view, from, _to, text) {
             const index = lastTriggerIndex(text);
             pendingArm = index === -1 ? null : from + index;
