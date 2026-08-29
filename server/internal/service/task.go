@@ -3620,16 +3620,20 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 
 // FinalizeTaskClaim atomically persists the task-scoped agent token, an
 // optional short-lived daemon token used by the Remote MCP broker, and, for a
-// comment-backed task, the exact comment ids embedded in the response. The
-// handler must call this only after the full payload has been built and before
-// writing any response bytes. A failure rolls every write back so the claim can
-// be safely returned to the queue.
+// comment-backed task, the exact comment ids embedded in the response. It also
+// freezes the workspace Skill IDs explicitly selected in that payload so the
+// later bundle resolver never has to trust a daemon ref or re-read mutable
+// source text. Empty grants avoid a new claim CAS unless a stale grant needs to
+// be cleared. The handler must call this only after the full payload has been
+// built and before writing any response bytes. A failure rolls every write back
+// so the claim can be safely returned to the queue.
 func (s *TaskService) FinalizeTaskClaim(
 	ctx context.Context,
 	task db.AgentTaskQueue,
 	token db.CreateTaskTokenParams,
 	deliveredCommentIDs []pgtype.UUID,
 	recordCommentReceipt bool,
+	selectedSkillIDs []pgtype.UUID,
 	daemonTokens ...db.CreateDaemonTokenParams,
 ) ([]pgtype.UUID, error) {
 	if len(daemonTokens) > 1 {
@@ -3648,6 +3652,21 @@ func (s *TaskService) FinalizeTaskClaim(
 			}
 			if _, err := qtx.CreateDaemonToken(ctx, daemonTokens[0]); err != nil {
 				return fmt.Errorf("create remote MCP daemon token: %w", err)
+			}
+		}
+		if len(selectedSkillIDs) > 0 || taskContextHasSelectedSkillGrant(task.Context) {
+			// pgx encodes a nil slice as SQL NULL. jsonb_set is strict, so always
+			// pass a concrete empty array when clearing an earlier task grant.
+			if selectedSkillIDs == nil {
+				selectedSkillIDs = []pgtype.UUID{}
+			}
+			if _, err := qtx.SetTaskClaimSelectedSkillIDs(ctx, db.SetTaskClaimSelectedSkillIDsParams{
+				SelectedSkillIds: selectedSkillIDs,
+				TaskID:           task.ID,
+				RuntimeID:        task.RuntimeID,
+				DispatchedAt:     task.DispatchedAt,
+			}); err != nil {
+				return fmt.Errorf("set selected skill ids: %w", err)
 			}
 		}
 		if !recordCommentReceipt {
@@ -3670,6 +3689,18 @@ func (s *TaskService) FinalizeTaskClaim(
 		return nil, err
 	}
 	return receipt, nil
+}
+
+func taskContextHasSelectedSkillGrant(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return false
+	}
+	_, ok := object["selected_skill_ids"]
+	return ok
 }
 
 // RequeueTaskAfterClaimFailure immediately releases an exact dispatched claim
@@ -6345,6 +6376,62 @@ func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) 
 		result = append(result, data)
 	}
 	return result
+}
+
+// LoadWorkspaceSkillsByIDs loads explicitly selected Skills through the
+// workspace boundary. Invalid, deleted, or cross-workspace IDs are omitted;
+// infrastructure failures are returned so a claim can be retried instead of
+// silently running without a Skill the user selected.
+func (s *TaskService) LoadWorkspaceSkillsByIDs(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	skillIDs []string,
+) ([]AgentSkillData, error) {
+	if !workspaceID.Valid || len(skillIDs) == 0 {
+		return nil, nil
+	}
+
+	result := make([]AgentSkillData, 0, len(skillIDs))
+	seen := make(map[string]struct{}, len(skillIDs))
+	for _, rawID := range skillIDs {
+		skillID, err := util.ParseUUID(rawID)
+		if err != nil {
+			continue
+		}
+		canonicalID := util.UUIDToString(skillID)
+		if _, ok := seen[canonicalID]; ok {
+			continue
+		}
+		seen[canonicalID] = struct{}{}
+
+		skill, err := s.Queries.GetSkillInWorkspace(ctx, db.GetSkillInWorkspaceParams{
+			ID:          skillID,
+			WorkspaceID: workspaceID,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("load selected workspace skill %s: %w", canonicalID, err)
+		}
+
+		data := AgentSkillData{
+			ID:          canonicalID,
+			Name:        skill.Name,
+			Description: skill.Description,
+			Content:     skill.Content,
+		}
+		files, err := s.Queries.ListSkillFiles(ctx, skill.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load selected workspace skill files %s: %w", canonicalID, err)
+		}
+		for _, file := range files {
+			data.Files = append(data.Files, AgentSkillFileData{Path: file.Path, Content: file.Content})
+		}
+		result = append(result, data)
+	}
+
+	return result, nil
 }
 
 // LoadAgentSkillBundles returns every skill visible to an agent, including

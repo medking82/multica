@@ -861,6 +861,26 @@ WHERE id = @task_id
   )
 RETURNING delivered_comment_ids;
 
+-- name: SetTaskClaimSelectedSkillIDs :one
+-- Freeze the workspace Skills explicitly selected in the exact payload this
+-- claim is about to deliver. Keeping the grant in the task's server-owned
+-- context lets the later bundle resolver authorize the same IDs without
+-- trusting a daemon-supplied ref or re-reading mutable chat/comment bodies.
+UPDATE agent_task_queue
+SET context = jsonb_set(
+    COALESCE(context, '{}'::jsonb),
+    '{selected_skill_ids}',
+    to_jsonb(COALESCE(@selected_skill_ids::uuid[], ARRAY[]::uuid[])),
+    true
+)
+WHERE id = @task_id
+  AND runtime_id = @runtime_id
+  AND status = 'dispatched'
+  AND started_at IS NULL
+  AND dispatched_at = @dispatched_at
+  AND (context IS NULL OR jsonb_typeof(context) = 'object')
+RETURNING context;
+
 -- name: RequeueAgentTaskAfterClaimFailure :one
 -- Claim finalization (task token + optional comment receipt) failed before any
 -- response bytes were written. Return only that exact claim generation to the

@@ -8087,6 +8087,46 @@ func (q *Queries) SetDeferredChannelIssueTaskRuntimeOverlay(ctx context.Context,
 	return result.RowsAffected(), nil
 }
 
+const setTaskClaimSelectedSkillIDs = `-- name: SetTaskClaimSelectedSkillIDs :one
+UPDATE agent_task_queue
+SET context = jsonb_set(
+    COALESCE(context, '{}'::jsonb),
+    '{selected_skill_ids}',
+    to_jsonb(COALESCE($1::uuid[], ARRAY[]::uuid[])),
+    true
+)
+WHERE id = $2
+  AND runtime_id = $3
+  AND status = 'dispatched'
+  AND started_at IS NULL
+  AND dispatched_at = $4
+  AND (context IS NULL OR jsonb_typeof(context) = 'object')
+RETURNING context
+`
+
+type SetTaskClaimSelectedSkillIDsParams struct {
+	SelectedSkillIds []pgtype.UUID      `json:"selected_skill_ids"`
+	TaskID           pgtype.UUID        `json:"task_id"`
+	RuntimeID        pgtype.UUID        `json:"runtime_id"`
+	DispatchedAt     pgtype.Timestamptz `json:"dispatched_at"`
+}
+
+// Freeze the workspace Skills explicitly selected in the exact payload this
+// claim is about to deliver. Keeping the grant in the task's server-owned
+// context lets the later bundle resolver authorize the same IDs without
+// trusting a daemon-supplied ref or re-reading mutable chat/comment bodies.
+func (q *Queries) SetTaskClaimSelectedSkillIDs(ctx context.Context, arg SetTaskClaimSelectedSkillIDsParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, setTaskClaimSelectedSkillIDs,
+		arg.SelectedSkillIds,
+		arg.TaskID,
+		arg.RuntimeID,
+		arg.DispatchedAt,
+	)
+	var context []byte
+	err := row.Scan(&context)
+	return context, err
+}
+
 const setTaskDeliveredCommentIDs = `-- name: SetTaskDeliveredCommentIDs :one
 UPDATE agent_task_queue
 SET delivered_comment_ids = $1::uuid[]
