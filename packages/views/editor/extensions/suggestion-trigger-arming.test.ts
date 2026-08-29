@@ -92,6 +92,26 @@ function type(editor: Editor, text: string): void {
   }
 }
 
+/**
+ * Chrome can route the first printable key after a handled select-all/delete
+ * through ProseMirror's keydown + DOM reconciliation path without calling
+ * `handleTextInput`. This mirrors that path: the keyboard hook runs, then the
+ * browser's DOM change becomes a normal insertion transaction.
+ */
+function typeFromKeyDown(editor: Editor, text: string): void {
+  for (const ch of text) {
+    const event = new KeyboardEvent("keydown", {
+      key: ch,
+      bubbles: true,
+      cancelable: true,
+    });
+    editor.view.dom.dispatchEvent(event);
+    if (!event.defaultPrevented) {
+      editor.view.dispatch(editor.state.tr.insertText(ch));
+    }
+  }
+}
+
 function picker(editor: Editor, pluginKey: PluginKey = key) {
   const state = pluginKey.getState(editor.state);
   return { active: state?.active, query: state?.query };
@@ -154,6 +174,18 @@ describe("suggestion trigger arming", () => {
       expect(picker(editor).active).toBe(false);
     });
 
+    it("does not reuse an uncommitted keydown arm for a later paste", () => {
+      const editor = makeEditor();
+      editor.commands.focus("end");
+      editor.view.dom.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true }),
+      );
+
+      paste(editor, "/usr/local/bin");
+
+      expect(picker(editor, slashKey).active).toBe(false);
+    });
+
     it("text already in the document when the editor mounts", () => {
       // No paste at all — a loaded draft, an undo, a collaborative edit. Tiptap
       // matches on document content alone, so this opened the picker too.
@@ -187,6 +219,24 @@ describe("suggestion trigger arming", () => {
       type(editor, "/shi");
 
       expect(picker(editor, slashKey)).toEqual({ active: true, query: "shi" });
+    });
+
+    it("reopens after select-all deletion when Chrome skips handleTextInput", () => {
+      const editor = makeEditor();
+      editor.commands.focus("end");
+      type(editor, "/");
+      expect(picker(editor, slashKey).active).toBe(true);
+
+      editor.commands.selectAll();
+      editor.commands.deleteSelection();
+      editor.commands.focus("end");
+      expect(picker(editor, slashKey).active).toBe(false);
+
+      typeFromKeyDown(editor, "/");
+
+      expect(editor.getText()).toBe("/");
+      expect(isTriggerArmedAt(editor, 1)).toBe(true);
+      expect(picker(editor, slashKey)).toEqual({ active: true, query: "" });
     });
 
     it("keeps multi-word queries alive, so allowSpaces issue search survives", () => {

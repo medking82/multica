@@ -28,12 +28,13 @@ import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
  *
  * ## How it works
  *
- * `handleTextInput` is the one ProseMirror hook that fires for real keyboard and
- * IME input only — paste goes through `handlePaste`/`doPaste` and drop through
- * `handleDrop`, neither of which reaches it. This is the same signal Tiptap's own
- * InputRules run on, which is why typing `- ` makes a list but pasting it does
- * not. Suggestion is the one Tiptap feature that does not use it; this plugin
- * supplies it.
+ * `handleTextInput` is ProseMirror's primary hook for real keyboard and IME
+ * input — paste goes through `handlePaste`/`doPaste` and drop through
+ * `handleDrop`, neither of which reaches it. Chrome has one exception: after a
+ * handled select-all/delete in a contenteditable, the next printable key can be
+ * reconciled from the DOM without calling `handleTextInput`. `handleKeyDown`
+ * supplies that missing provenance; the following transaction must still prove
+ * that the trigger character was actually inserted before it is armed.
  *
  * Typing a trigger character arms its document position. The pickers' `shouldShow`
  * then opens only for a match anchored at the armed position. Anything the user
@@ -100,9 +101,30 @@ export const SuggestionTriggerArmingExtension = Extension.create({
           },
 
           apply(tr, prev, _oldState, newState) {
+            const armCandidate = pendingArm;
+            // `handleTextInput` is followed immediately by a document change.
+            // The keydown fallback may first be followed by an internal
+            // selection/meta transaction, so keep that candidate only while
+            // the caret remains at its insertion point. A document change
+            // always consumes it, whether or not it proves valid.
+            if (armCandidate !== null) {
+              if (tr.docChanged || (tr.selectionSet && newState.selection.from !== armCandidate)) {
+                pendingArm = null;
+              }
+            }
+
             const next = ((): number | null => {
-              // A trigger character was just typed — arm it unconditionally.
-              if (pendingArm !== null) return pendingArm;
+              // A trigger character was just typed. The keydown fallback can
+              // run even when a later plugin consumes the key, so only accept
+              // the candidate on a document change that really inserted a
+              // trigger at that position.
+              if (
+                armCandidate !== null &&
+                tr.docChanged &&
+                stillHoldsTrigger(newState.doc, armCandidate)
+              ) {
+                return armCandidate;
+              }
               if (prev === null) return null;
 
               // A deliberate caret move (click, arrow key) abandons the trigger.
@@ -122,17 +144,45 @@ export const SuggestionTriggerArmingExtension = Extension.create({
               return mapped;
             })();
 
-            pendingArm = null;
             armedPositions.set(editor, next);
             return next;
           },
         },
 
         props: {
+          handleKeyDown(view, event) {
+            // `handleTextInput` remains authoritative for IME and modified-key
+            // layouts. This fallback is only for an unmodified printable
+            // trigger that Chrome may commit through DOM reconciliation.
+            if (
+              !event.isComposing &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.altKey &&
+              TRIGGER_CHARS.has(event.key)
+            ) {
+              pendingArm = view.state.selection.from;
+            } else {
+              pendingArm = null;
+            }
+            return false;
+          },
           handleTextInput(_view, from, _to, text) {
             const index = lastTriggerIndex(text);
-            if (index !== -1) pendingArm = from + index;
+            pendingArm = index === -1 ? null : from + index;
             // Never handle the input — every other plugin must still see it.
+            return false;
+          },
+          handlePaste() {
+            pendingArm = null;
+            return false;
+          },
+          handleDrop() {
+            pendingArm = null;
+            return false;
+          },
+          handleClick() {
+            pendingArm = null;
             return false;
           },
         },
