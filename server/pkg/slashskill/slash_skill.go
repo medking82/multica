@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// MaxSelectedPerPayload is the server-owned ceiling for one task-scoped
+// Skill selection. The UI mirrors this value for display, while every backend
+// admission path uses it as the authoritative cap.
+const MaxSelectedPerPayload = 20
+
 var markerRE = regexp.MustCompile(
 	`\[/((?:[^\]\\]|\\.)+)\]\(slash://skill/([^)]+)\)`,
 )

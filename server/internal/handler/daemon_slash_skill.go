@@ -16,7 +16,7 @@ import (
 
 // Matches the editor's display cap. The server still owns this ceiling so a
 // hand-written Markdown payload cannot inflate a claim with unbounded Skills.
-const maxSelectedSlashSkillsPerTask = 20
+const maxSelectedSlashSkillsPerTask = slashskill.MaxSelectedPerPayload
 
 func selectedSlashSkillIDs(markdowns ...string) []string {
 	ids := make([]string, 0, maxSelectedSlashSkillsPerTask)
@@ -40,9 +40,15 @@ func selectedSlashSkillIDs(markdowns ...string) []string {
 // comment bodies actually admitted into this claim. Legacy chat tasks have no
 // durable input owner, so they retain the existing attached-Skills behavior.
 func selectedSlashSkillIDsForClaim(task db.AgentTaskQueue, resp AgentTaskResponse) []string {
-	markdowns := make([]string, 0, len(resp.CoalescedComments)+2)
+	markdowns := make([]string, 0, len(resp.CoalescedComments)+3)
 	if task.ChatInputTaskID.Valid {
 		markdowns = append(markdowns, resp.ChatMessage)
+	}
+	// Quick-create's prompt is immutable, server-owned task context submitted
+	// by the accountable member. It is the exact create-task payload this run
+	// is claiming, so its slash markers have the same authority as chat input.
+	if resp.QuickCreatePrompt != "" {
+		markdowns = append(markdowns, resp.QuickCreatePrompt)
 	}
 	// A slash marker grants executable task authority, so only attributable
 	// human input may create it. Agent/system comments remain prompt context but
@@ -58,6 +64,24 @@ func selectedSlashSkillIDsForClaim(task db.AgentTaskQueue, resp AgentTaskRespons
 		}
 	}
 	return selectedSlashSkillIDs(markdowns...)
+}
+
+func mergeSelectedSkillIDs(groups ...[]string) []string {
+	ids := make([]string, 0, maxSelectedSlashSkillsPerTask)
+	seen := make(map[string]struct{}, maxSelectedSlashSkillsPerTask)
+	for _, group := range groups {
+		for _, id := range group {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+			if len(ids) == maxSelectedSlashSkillsPerTask {
+				return ids
+			}
+		}
+	}
+	return ids
 }
 
 func mergeTaskSkills(
@@ -116,10 +140,22 @@ func (h *Handler) applyClaimTaskSkills(
 			message: "failed to resolve task workspace Skills",
 		}
 	}
+	storedSelectedIDs, err := selectedSkillIDsFromTaskContext(task.Context)
+	if err != nil {
+		return 0, 0, &claimBuildFailure{
+			outcome: "error_selected_skills",
+			status:  http.StatusInternalServerError,
+			message: "failed to resolve task workspace Skills",
+		}
+	}
+	selectedIDs := mergeSelectedSkillIDs(
+		storedSelectedIDs,
+		selectedSlashSkillIDsForClaim(task, *resp),
+	)
 	selected, err := h.TaskService.LoadWorkspaceSkillsByIDs(
 		ctx,
 		workspaceID,
-		selectedSlashSkillIDsForClaim(task, *resp),
+		selectedIDs,
 	)
 	if err != nil {
 		return 0, 0, &claimBuildFailure{

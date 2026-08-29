@@ -49,6 +49,18 @@ func TestSelectedSlashSkillIDsForClaimTrustsOnlyMemberComments(t *testing.T) {
 	}
 }
 
+func TestSelectedSlashSkillIDsForClaimIncludesQuickCreatePrompt(t *testing.T) {
+	task := db.AgentTaskQueue{Context: []byte(`{"type":"quick_create"}`)}
+	resp := AgentTaskResponse{
+		QuickCreatePrompt: "please [/architecture-sweep](slash://skill/11111111-1111-4111-8111-111111111111)",
+	}
+
+	ids := selectedSlashSkillIDsForClaim(task, resp)
+	if len(ids) != 1 || ids[0] != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("selected ids = %v, want quick-create prompt marker", ids)
+	}
+}
+
 func TestMergeTaskSkillsDoesNotMutateConfiguredBackingArray(t *testing.T) {
 	configured := make([]service.AgentSkillData, 2, 4)
 	configured[0] = service.AgentSkillData{ID: "configured-1"}
@@ -61,6 +73,102 @@ func TestMergeTaskSkillsDoesNotMutateConfiguredBackingArray(t *testing.T) {
 	}
 	if configured[:cap(configured)][2].ID != "" {
 		t.Fatal("mergeTaskSkills wrote selected data into configured backing array")
+	}
+}
+
+func TestCreateIssueFreezesSelectedWorkspaceSkillForInitialRun(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "Create Issue Selected Skill runtime")
+	agentID := dbfx.Agent(t, "Create Issue Selected Skill agent", runtimeID)
+	selectedID := dbfx.Insert(t, "skill", testutil.Cols{
+		"workspace_id": testWorkspaceID,
+		"name":         "architecture-sweep",
+		"description":  "Selected in the create-task description",
+		"content":      "selected content",
+		"config":       testutil.Raw("'{}'::jsonb"),
+		"created_by":   testUserID,
+	})
+	unselectedID := dbfx.Insert(t, "skill", testutil.Cols{
+		"workspace_id": testWorkspaceID,
+		"name":         "later-description-skill",
+		"description":  "Added only after the initial task was created",
+		"content":      "must not be selected",
+		"config":       testutil.Raw("'{}'::jsonb"),
+		"created_by":   testUserID,
+	})
+
+	w := testutil.Call(t, testHandler.CreateIssue, newRequest(
+		http.MethodPost,
+		"/api/issues?workspace_id="+testWorkspaceID,
+		map[string]any{
+			"title":         "Create task with selected Skill",
+			"description":   "please [/architecture-sweep](slash://skill/" + selectedID + ")",
+			"status":        "todo",
+			"priority":      "none",
+			"assignee_type": "agent",
+			"assignee_id":   agentID,
+		},
+	)).Want(http.StatusCreated)
+
+	var created struct {
+		ID string `json:"id"`
+	}
+	w.JSON(&created)
+	if created.ID == "" {
+		t.Fatalf("missing created issue id: %s", w.Body.String())
+	}
+	dbfx.Cleanup(t, `DELETE FROM issue WHERE id = $1`, created.ID)
+	dbfx.Cleanup(t, `DELETE FROM agent_task_queue WHERE issue_id = $1`, created.ID)
+
+	var taskID, persistedContext string
+	dbfx.QueryRow(t, `
+		SELECT id::text, COALESCE(context::text, 'null')
+		FROM agent_task_queue
+		WHERE issue_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, created.ID).Scan(&taskID, &persistedContext)
+	if !strings.Contains(persistedContext, selectedID) {
+		t.Fatalf("initial task %s did not freeze selected Skill %s: %s", taskID, selectedID, persistedContext)
+	}
+
+	// The issue body is mutable after creation. Replacing its marker must not
+	// revoke the original grant or smuggle a different Skill into this run.
+	dbfx.Exec(t, `UPDATE issue SET description = $2 WHERE id = $1`, created.ID,
+		"later [/later-description-skill](slash://skill/"+unselectedID+")")
+	req := newDaemonTokenRequest(
+		http.MethodPost,
+		"/api/daemon/runtimes/"+runtimeID+"/tasks/claim",
+		nil,
+		testWorkspaceID,
+		"create-issue-selected-skill-daemon",
+	)
+	req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilitySkillBundlesV1)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	w = testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
+
+	var claim struct {
+		Task *AgentTaskResponse `json:"task"`
+	}
+	w.JSON(&claim)
+	if claim.Task == nil || claim.Task.Agent == nil {
+		t.Fatalf("missing claimed task Agent: %s", w.Body.String())
+	}
+	selectedFound := false
+	for _, ref := range claim.Task.Agent.SkillRefs {
+		if ref.ID == selectedID {
+			selectedFound = true
+		}
+		if ref.ID == unselectedID {
+			t.Fatalf("Skill added to mutable issue description leaked into initial run: %+v", ref)
+		}
+	}
+	if !selectedFound {
+		t.Fatalf("create-time selected Skill missing from initial claim refs: %+v", claim.Task.Agent.SkillRefs)
 	}
 }
 
