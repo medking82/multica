@@ -1,5 +1,5 @@
 import { Extension, type Editor } from "@tiptap/core";
-import { AllSelection, Plugin, PluginKey, Selection } from "@tiptap/pm/state";
+import { Plugin, PluginKey, Selection } from "@tiptap/pm/state";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 
@@ -94,7 +94,12 @@ function domInsertionPosition(view: EditorView): number {
   // Chrome leaves the ProseMirror selection stale at AllSelection after the
   // browser empties the contenteditable. Its next printable key is placed in
   // the schema-preserved first paragraph, not at AllSelection.from (0).
-  if (view.state.selection instanceof AllSelection) {
+  const { selection: stateSelection, doc } = view.state;
+  const selectsWholeDocument =
+    !stateSelection.empty &&
+    stateSelection.from === 0 &&
+    stateSelection.to === doc.content.size;
+  if (selectsWholeDocument) {
     return Selection.atStart(view.state.doc).from;
   }
 
