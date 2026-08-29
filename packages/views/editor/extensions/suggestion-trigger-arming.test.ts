@@ -93,12 +93,11 @@ function type(editor: Editor, text: string): void {
 }
 
 /**
- * Chrome can route the first printable key after a handled select-all/delete
- * through ProseMirror's keydown + DOM reconciliation path without calling
- * `handleTextInput`. This mirrors that path: the keyboard hook runs, then the
- * browser's DOM change becomes a normal insertion transaction.
+ * Chrome routes the first printable key after a handled select-all/delete
+ * through a native keydown, then calls `handleTextInput` with the still-stale
+ * AllSelection range before reconciling the DOM insertion transaction.
  */
-function typeFromKeyDown(editor: Editor, text: string): void {
+function typeFromKeyDownAndTextInput(editor: Editor, text: string): void {
   for (const ch of text) {
     const event = new KeyboardEvent("keydown", {
       key: ch,
@@ -106,9 +105,21 @@ function typeFromKeyDown(editor: Editor, text: string): void {
       cancelable: true,
     });
     editor.view.dom.dispatchEvent(event);
-    if (!event.defaultPrevented) {
-      editor.view.dispatch(editor.state.tr.insertText(ch));
-    }
+    const { from, to } = editor.state.selection;
+    const armingPlugin = editor.state.plugins.find((plugin) =>
+      (plugin as unknown as { key: string }).key.startsWith(
+        "suggestionTriggerArming",
+      ),
+    );
+    armingPlugin?.props.handleTextInput?.call(
+      armingPlugin,
+      editor.view,
+      from,
+      to,
+      ch,
+      () => editor.state.tr.insertText(ch),
+    );
+    editor.view.dispatch(editor.state.tr.insertText(ch));
   }
 }
 
@@ -234,7 +245,7 @@ describe("suggestion trigger arming", () => {
       expect(picker(editor, slashKey)).toEqual({ active: true, query: "shi" });
     });
 
-    it("reopens after select-all deletion when Chrome skips handleTextInput", () => {
+    it("reopens after select-all deletion with Chrome's stale input range", () => {
       const editor = makeEditor();
       editor.commands.focus("end");
       type(editor, "/");
@@ -246,7 +257,7 @@ describe("suggestion trigger arming", () => {
       expect(editor.state.selection.toJSON().type).toBe("all");
       expect(picker(editor, slashKey).active).toBe(false);
 
-      typeFromKeyDown(editor, "/");
+      typeFromKeyDownAndTextInput(editor, "/");
 
       expect(editor.getText()).toBe("/");
       expect(isTriggerArmedAt(editor, 1)).toBe(true);

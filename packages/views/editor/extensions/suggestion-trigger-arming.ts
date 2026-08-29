@@ -79,6 +79,15 @@ function stillHoldsTrigger(doc: ProseMirrorNode, pos: number): boolean {
   return TRIGGER_CHARS.has(doc.textBetween(pos, pos + 1));
 }
 
+function selectsWholeDocument(view: EditorView): boolean {
+  const { selection, doc } = view.state;
+  return (
+    !selection.empty &&
+    selection.from === 0 &&
+    selection.to === doc.content.size
+  );
+}
+
 /**
  * Position where a printable key will replace/insert text according to the
  * browser's live selection.
@@ -94,12 +103,7 @@ function domInsertionPosition(view: EditorView): number {
   // Chrome leaves the ProseMirror selection stale at AllSelection after the
   // browser empties the contenteditable. Its next printable key is placed in
   // the schema-preserved first paragraph, not at AllSelection.from (0).
-  const { selection: stateSelection, doc } = view.state;
-  const selectsWholeDocument =
-    !stateSelection.empty &&
-    stateSelection.from === 0 &&
-    stateSelection.to === doc.content.size;
-  if (selectsWholeDocument) {
+  if (selectsWholeDocument(view)) {
     return Selection.atStart(view.state.doc).from;
   }
 
@@ -226,9 +230,12 @@ export const SuggestionTriggerArmingExtension = Extension.create({
         },
 
         props: {
-          handleTextInput(_view, from, _to, text) {
+          handleTextInput(view, from, _to, text) {
             const index = lastTriggerIndex(text);
-            pendingArm = index === -1 ? null : from + index;
+            const base = selectsWholeDocument(view)
+              ? Selection.atStart(view.state.doc).from
+              : from;
+            pendingArm = index === -1 ? null : base + index;
             // Never handle the input — every other plugin must still see it.
             return false;
           },
