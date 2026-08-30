@@ -1,11 +1,13 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UpdateNotification } from "./update-notification";
+import type { UpdateInstallState } from "../../../shared/updater-types";
 
 const mocks = vi.hoisted(() => ({
   installUpdate: vi.fn(),
   openExternal: vi.fn(),
+  getInstallState: vi.fn(),
 }));
 
 type UpdateDownloadedListener = (info: {
@@ -15,9 +17,11 @@ type UpdateDownloadedListener = (info: {
 
 describe("UpdateNotification", () => {
   let updateDownloaded: UpdateDownloadedListener;
+  let installStateChanged: (state: UpdateInstallState) => void;
 
   beforeEach(() => {
-    mocks.installUpdate.mockReset().mockResolvedValue(undefined);
+    mocks.installUpdate.mockReset().mockResolvedValue({ status: "ready", version: "0.4.27" });
+    mocks.getInstallState.mockReset().mockResolvedValue({ status: "idle" });
     mocks.openExternal.mockReset().mockResolvedValue(undefined);
 
     Object.defineProperty(window, "desktopAPI", {
@@ -28,11 +32,13 @@ describe("UpdateNotification", () => {
       configurable: true,
       value: {
         installRequiresStoppedRuntime: false,
-        onUpdateDownloaded: (listener: UpdateDownloadedListener) => {
-          updateDownloaded = listener;
+        onInstallStateChanged: (listener: (state: UpdateInstallState) => void) => {
+          installStateChanged = listener;
+          updateDownloaded = (info) => listener({ status: "ready", version: info.version });
           return vi.fn();
         },
         installUpdate: mocks.installUpdate,
+        getInstallState: mocks.getInstallState,
       },
     });
   });
@@ -51,13 +57,60 @@ describe("UpdateNotification", () => {
     );
   });
 
-  it("still installs the update immediately from the primary action", () => {
+  it("requests installation from the primary action", async () => {
     render(<UpdateNotification />);
     act(() => updateDownloaded({ version: "0.4.27" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Restart now" }));
 
     expect(mocks.installUpdate).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Restart now" })).not.toBeDisabled());
+  });
+
+  it("rehydrates a deferred download on remount without needing another event", async () => {
+    mocks.getInstallState.mockResolvedValue({ status: "deferred", version: "0.4.37", allowed: false, reason: "runtime_running" });
+    const view = render(<UpdateNotification />);
+    await screen.findByRole("button", { name: "Retry installation" });
+    expect(screen.getByRole("status")).toHaveTextContent("Finish active runs");
+    expect(screen.getByRole("status")).toHaveTextContent("Runtimes");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss update notification" }));
+    expect(screen.queryByRole("button", { name: "Retry installation" })).not.toBeInTheDocument();
+    view.unmount();
+    render(<UpdateNotification />);
+    await screen.findByRole("button", { name: "Retry installation" });
+  });
+
+  it("prevents duplicate clicks while checking and surfaces a bounded retry reason", async () => {
+    let finish!: (state: UpdateInstallState) => void;
+    mocks.installUpdate.mockImplementation(() => new Promise<UpdateInstallState>((resolve) => { finish = resolve; }));
+    render(<UpdateNotification />);
+    act(() => updateDownloaded({ version: "0.4.37" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart now" }));
+    const pending = screen.getByRole("button", { name: "Checking runtime…" });
+    expect(pending).toBeDisabled();
+    fireEvent.click(pending);
+    expect(mocks.installUpdate).toHaveBeenCalledOnce();
+    await act(async () => finish({ status: "deferred", version: "0.4.37", allowed: false, reason: "probe_failed", diagnostic: "timed_out" }));
+    expect(screen.getByRole("status")).toHaveTextContent("timed_out");
+    expect(screen.getByRole("button", { name: "Retry installation" })).not.toBeDisabled();
+  });
+
+  it("keeps a newer event when the initial state snapshot resolves late", async () => {
+    let finish!: (state: UpdateInstallState) => void;
+    mocks.getInstallState.mockImplementation(() => new Promise<UpdateInstallState>((resolve) => { finish = resolve; }));
+    render(<UpdateNotification />);
+    act(() => installStateChanged({ status: "ready", version: "0.4.38" }));
+    await act(async () => finish({ status: "idle" }));
+    expect(screen.getByText("v0.4.38 will be applied on next launch.")).toBeInTheDocument();
+  });
+
+  it("shows IPC failure and allows retry instead of a silent disabled action", async () => {
+    mocks.installUpdate.mockRejectedValue(new Error("disconnected"));
+    render(<UpdateNotification />);
+    act(() => updateDownloaded({ version: "0.4.37" }));
+    fireEvent.click(screen.getByRole("button", { name: "Restart now" }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("button", { name: "Restart now" })).not.toBeDisabled();
   });
 
   it("explains runtime deferral without changing the official changelog link", () => {

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { win32 } from "node:path";
 import { bundledCliPath } from "./bundled-cli";
+import type { UpdateInstallCheck, UpdateInstallDiagnostic } from "../shared/updater-types";
 
 // A running bundled CLI holds its executable open on Windows. Never stop it
 // for an update: it may own active runs, even when Desktop is closing. Query
@@ -14,12 +15,19 @@ const PROCESS_CHECK = [
   "if ($blocked) { 'blocked' } else { 'clear' }",
 ].join("\n");
 
-export async function canInstallWindowsUpdate(platform = process.platform): Promise<boolean> {
-  if (platform !== "win32") return true;
-  if (!process.env.SystemRoot) return false;
+function failed(diagnostic: UpdateInstallDiagnostic): UpdateInstallCheck {
+  // Only bounded codes: never log paths, environment, process details or stderr.
+  console.warn(`[updater] install deferred: ${diagnostic}`);
+  return { allowed: false, reason: "probe_failed", diagnostic };
+}
+
+export async function checkWindowsUpdateInstall(platform = process.platform): Promise<UpdateInstallCheck> {
+  if (platform !== "win32") return { allowed: true };
+  const systemRoot = process.env.SystemRoot;
+  if (!systemRoot || !win32.isAbsolute(systemRoot)) return failed("system_root_missing");
   return new Promise((resolve) => {
     execFile(
-      join(process.env.SystemRoot!, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", PROCESS_CHECK],
       {
         windowsHide: true,
@@ -27,7 +35,17 @@ export async function canInstallWindowsUpdate(platform = process.platform): Prom
         maxBuffer: 4_096,
         env: { ...process.env, MULTICA_UPDATE_CLI_PATH: bundledCliPath() },
       },
-      (error, stdout) => resolve(!error && stdout.trim() === "clear"),
+      (error, stdout) => {
+        if (error) {
+          resolve(failed(error.killed ? "timed_out" : "launch_failed"));
+        } else if (stdout.trim() === "clear") {
+          resolve({ allowed: true });
+        } else if (stdout.trim() === "blocked") {
+          resolve({ allowed: false, reason: "runtime_running" });
+        } else {
+          resolve(failed("invalid_output"));
+        }
+      },
     );
   });
 }

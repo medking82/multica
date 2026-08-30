@@ -10,6 +10,7 @@ import type {
 import type {
   ManualUpdateCheckResult,
   UpdaterPreferences,
+  UpdateInstallState,
 } from "../shared/updater-types";
 import type {
   DaemonStatus,
@@ -155,7 +156,9 @@ interface UpdaterAPI {
     callback: (info: { version: string; releaseNotes?: string }) => void,
   ) => () => void;
   downloadUpdate: () => Promise<void>;
-  installUpdate: () => Promise<void>;
+  installUpdate: () => Promise<UpdateInstallState>;
+  getInstallState: () => Promise<UpdateInstallState>;
+  onInstallStateChanged: (callback: (state: UpdateInstallState) => void) => () => void;
   getPreferences: () => Promise<UpdaterPreferences>;
   setAutomaticUpdates: (enabled: boolean) => Promise<UpdaterPreferences>;
   checkForUpdates: () => Promise<ManualUpdateCheckResult>;
