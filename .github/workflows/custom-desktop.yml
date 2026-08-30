@@ -65,7 +65,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           CUSTOM_VERSION: ${{ steps.prepare.outputs.version }}
-        run: node apps/desktop/scripts/package.mjs --win --x64 --publish never "-c.extraMetadata.version=$env:CUSTOM_VERSION" -c.win.signAndEditExecutable=false -c.publish.channel=latest
+        run: node apps/desktop/scripts/package.mjs --win --x64 --publish never "-c.extraMetadata.version=$env:CUSTOM_VERSION" "-c.win.signAndEditExecutable=false" "-c.publish.channel=latest"
       - name: Inspect final ASAR, five composers, CLI, update metadata and hashes
         if: steps.prepare.outputs.needed == 'true'
         run: node scripts/custom-desktop/artifact.mjs payload "$env:PAYLOAD"
