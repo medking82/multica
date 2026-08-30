@@ -70,6 +70,9 @@ export function NativeDictationButton({
           case "busy":
             toast.error(t(($) => $.desktop.dictation.busy));
             break;
+          case "cleanup_failed":
+            toast.error(t(($) => $.desktop.dictation.cleanup_failed));
+            break;
           default:
             toast.error(t(($) => $.desktop.dictation.unavailable));
         }
@@ -89,6 +92,7 @@ export function NativeDictationButton({
   return (
     <Button
       type="button"
+      data-native-dictation=""
       variant="ghost"
       size={size === "sm" ? "icon-xs" : "icon-sm"}
       aria-label={label}

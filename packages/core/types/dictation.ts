@@ -10,6 +10,7 @@ export type DictationResult =
         | "app_not_running"
         | "not_focused"
         | "busy"
+        | "cleanup_failed"
         | "unavailable";
     };
 

@@ -72,7 +72,7 @@ describe("VoiceInputButton native-only bridge", () => {
     expect(screen.getByRole("button", { name: "Dictate with Codex" })).not.toHaveAttribute("aria-pressed");
   });
 
-  it.each(["not_configured", "app_not_running", "not_focused", "busy", "unavailable"])(
+  it.each(["not_configured", "app_not_running", "not_focused", "busy", "cleanup_failed", "unavailable"])(
     "never falls back to API or microphone capture on native %s", async (reason) => {
       const { ref, insert } = editorRef();
       const toggle = vi.fn().mockResolvedValue({ ok: false, reason });

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import type { DictationResult } from "@multica/core/types/dictation";
-import { CODEX_DICTATION_CHANNEL } from "../shared/dictation";
+import { CODEX_DICTATION_CHANNEL, CODEX_DICTATION_WORLD } from "../shared/dictation";
 import { isTrustedRendererURL } from "./navigation-guard";
 import { bundledCliPath } from "./bundled-cli";
 
@@ -76,9 +76,9 @@ async function hasInputGesture(event: IpcMainInvokeEvent): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      event.sender.executeJavaScript(
-        "navigator.userActivation.isActive === true && document.activeElement?.isContentEditable === true",
-      ).then((value: unknown) => value === true),
+      event.sender.executeJavaScriptInIsolatedWorld(CODEX_DICTATION_WORLD, [{
+        code: "globalThis.multicaDictationActivation?.consume() === true",
+      }], false).then((value: unknown) => value === true),
       new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 1000); }),
     ]);
   } finally {
@@ -105,7 +105,8 @@ async function sendDictationChord(window: BrowserWindow): Promise<DictationResul
           case "app_not_running":
           case "not_focused":
           case "busy":
-            resolve({ ok: false, reason: stdout.trim() as "app_not_running" | "not_focused" | "busy" });
+          case "cleanup_failed":
+            resolve({ ok: false, reason: stdout.trim() as "app_not_running" | "not_focused" | "busy" | "cleanup_failed" });
             break;
           default:
             resolve({ ok: false, reason: "unavailable" });
@@ -117,7 +118,16 @@ async function sendDictationChord(window: BrowserWindow): Promise<DictationResul
 
 /** Register only windows created by our main/issue renderer loader. */
 export function registerCodexDictationWindow(window: BrowserWindow, rendererURL: string): void {
+  const registered = trustedWindows.has(window);
   trustedWindows.set(window, rendererURL);
+  if (registered || process.platform !== "win32") return;
+  // A registered OS hotkey consumes this before Chromium sees it. If Codex
+  // failed to register/consume it, reserve the exact chord rather than letting
+  // AltGr layouts turn it into draft text. Other shortcuts are unchanged.
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.control && input.alt && input.shift && !input.meta &&
+      (input.code === "KeyD" || input.key.toLowerCase() === "d")) event.preventDefault();
+  });
 }
 
 export function setupCodexDictation(): void {
@@ -129,8 +139,8 @@ export function setupCodexDictation(): void {
     if (!window) return { ok: false, reason: "not_focused" };
     pending = true;
     try {
-      // Main, not renderer payload, checks that the parameterless call follows
-      // a user gesture. The preload exposes no arbitrary-key or command API.
+      // Consume one mic activation in the isolated preload. Page-wide user
+      // activation and page-owned DOM wrappers cannot authorize this call.
       if (!await hasInputGesture(event)) return { ok: false, reason: "unavailable" };
       if (!await isShortcutConfigured()) return { ok: false, reason: "not_configured" };
       if (trustedFocusedWindow(event) !== window) return { ok: false, reason: "not_focused" };

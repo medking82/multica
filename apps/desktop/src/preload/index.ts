@@ -22,6 +22,7 @@ import {
 } from "../shared/issue-window";
 import { AUTH_SESSION_STATE_CHANNEL } from "../shared/auth-session";
 import { CODEX_DICTATION_CHANNEL } from "../shared/dictation";
+import { installCodexDictationActivation } from "./dictation-activation";
 import type {
   DaemonStatus,
   LocalRuntimeProbe,
@@ -321,6 +322,7 @@ const updaterAPI = {
 };
 
 if (process.contextIsolated) {
+  if (process.platform === "win32") installCodexDictationActivation();
   contextBridge.exposeInMainWorld("electron", electronAPI);
   contextBridge.exposeInMainWorld("desktopAPI", desktopAPI);
   contextBridge.exposeInMainWorld("daemonAPI", daemonAPI);

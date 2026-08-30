@@ -105,6 +105,7 @@
       "app_not_running": "请打开 Windows 版 Codex/ChatGPT 桌面应用并保持登录，然后重试。仅安装 Codex CLI 无法提供全局语音输入。",
       "not_focused": "请保持当前 Multica 窗口和输入框处于选中状态，然后重试。",
       "busy": "请松开按住的快捷键，稍等片刻后重试。",
+      "cleanup_failed": "部分 shortcut keys 未能释放。输入前请分别按下并松开 Ctrl、Alt、Shift 和 D。再次 toggle 前，请检查 Codex dictation 状态。",
       "unavailable": "无法打开 Codex 语音输入，请手动尝试 Ctrl+Alt+Shift+D。未向 Multica 转写 API 发送音频。",
       "editor_not_ready": "输入框尚未准备好，请重试。"
     }

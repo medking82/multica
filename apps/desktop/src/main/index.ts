@@ -829,12 +829,12 @@ if (!gotTheLock) {
     });
 
     desktopInitialized = true;
+    setupCodexDictation();
     createWindow();
 
     setupAutoUpdater(() => mainWindow);
     setupDaemonManager(() => mainWindow);
     setupLocalDirectory(() => mainWindow);
-    setupCodexDictation();
 
     app.on("activate", () => {
       const window = ensureMainWindow();

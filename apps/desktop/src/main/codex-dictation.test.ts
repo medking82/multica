@@ -58,6 +58,7 @@ describe("dictation IPC", () => {
   let fakeWindow: BrowserWindow;
   let event: IpcMainInvokeEvent;
   let invoke: (event: IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
+  let windowEvents: ReturnType<typeof vi.fn>;
   const close = vi.fn();
 
   beforeEach(() => {
@@ -69,19 +70,24 @@ describe("dictation IPC", () => {
     raw = binding;
     const handle = Buffer.alloc(8);
     handle.writeBigUInt64LE(42n);
+    const contents = {
+      on: vi.fn(),
+      isDestroyed: () => false,
+      mainFrame: { url: "file:///C:/Multica/out/renderer/index.html" },
+      executeJavaScript: vi.fn().mockResolvedValue(true),
+      executeJavaScriptInIsolatedWorld: vi.fn().mockResolvedValue(true),
+    };
+    windowEvents = contents.on;
     fakeWindow = {
       isDestroyed: () => false,
       isFocused: () => focused,
       getNativeWindowHandle: () => handle,
+      webContents: contents,
     } as unknown as BrowserWindow;
-    const frame = { url: "file:///C:/Multica/out/renderer/index.html" };
+    const frame = contents.mainFrame;
     event = {
       senderFrame: frame,
-      sender: {
-        isDestroyed: () => false,
-        mainFrame: frame,
-        executeJavaScript: vi.fn().mockResolvedValue(true),
-      },
+      sender: contents,
     } as unknown as IpcMainInvokeEvent;
     mocks.fromWebContents.mockReturnValue(fakeWindow);
     registerCodexDictationWindow(fakeWindow, frame.url);
@@ -135,20 +141,21 @@ describe("dictation IPC", () => {
     },
   );
 
-  it("requires a recent user gesture and an editable input", async () => {
-    vi.mocked(event.sender.executeJavaScript).mockResolvedValue(false);
+  it("ignores spoofed main-world activation and requires the isolated mic grant", async () => {
+    vi.mocked(event.sender.executeJavaScriptInIsolatedWorld).mockResolvedValue(false);
     expect(await invoke(event)).toEqual({ ok: false, reason: "unavailable" });
+    expect(event.sender.executeJavaScript).not.toHaveBeenCalled();
     expect(mocks.open).not.toHaveBeenCalled();
     expect(mocks.execFile).not.toHaveBeenCalled();
   });
 
   it("times out a stalled renderer instead of locking dictation forever", async () => {
     vi.useFakeTimers();
-    vi.mocked(event.sender.executeJavaScript).mockReturnValue(new Promise(() => {}));
+    vi.mocked(event.sender.executeJavaScriptInIsolatedWorld).mockReturnValue(new Promise(() => {}));
     const result = invoke(event);
     await vi.advanceTimersByTimeAsync(1000);
     expect(await result).toEqual({ ok: false, reason: "unavailable" });
-    vi.mocked(event.sender.executeJavaScript).mockResolvedValue(true);
+    vi.mocked(event.sender.executeJavaScriptInIsolatedWorld).mockResolvedValue(true);
     expect(await invoke(event)).toMatchObject({ ok: true });
   });
 
@@ -174,16 +181,44 @@ describe("dictation IPC", () => {
   });
 
   it("allows only one in-flight toggle across all windows", async () => {
+    const secondWindow = {
+      ...fakeWindow,
+      webContents: { ...event.sender, on: vi.fn(), executeJavaScriptInIsolatedWorld: vi.fn().mockResolvedValue(true) },
+    } as unknown as BrowserWindow;
+    const secondEvent = { ...event, sender: secondWindow.webContents } as IpcMainInvokeEvent;
+    registerCodexDictationWindow(secondWindow, event.senderFrame!.url);
+    mocks.fromWebContents.mockImplementation((sender) =>
+      sender === secondEvent.sender ? secondWindow : fakeWindow,
+    );
     let complete!: (error: null, stdout: string) => void;
     mocks.execFile.mockImplementation((_path, _args, _options, callback) => { complete = callback; });
     const first = invoke(event);
     await vi.waitFor(() => expect(mocks.execFile).toHaveBeenCalledOnce());
-    expect(await invoke(event)).toEqual({ ok: false, reason: "busy" });
+    expect(await invoke(secondEvent)).toEqual({ ok: false, reason: "busy" });
+    expect(secondEvent.sender.executeJavaScriptInIsolatedWorld).not.toHaveBeenCalled();
     complete(null, "sent");
     expect(await first).toMatchObject({ ok: true });
   });
 
-  it.each(["app_not_running", "not_focused", "busy"])("preserves native failure %s", async (reason) => {
+  it("blocks the unconsumed fixed chord before it can edit a draft, including AltGr layouts", () => {
+    const registration = windowEvents.mock.calls.find(
+      ([name]) => name === "before-input-event",
+    );
+    expect(registration).toBeDefined();
+    const listener = registration![1] as (event: { preventDefault: () => void }, input: object) => void;
+    for (const key of ["D", "Đ"]) {
+      const preventDefault = vi.fn();
+      listener({ preventDefault }, { type: "keyDown", key, code: "KeyD", control: true, alt: true, shift: true, meta: false });
+      expect(preventDefault).toHaveBeenCalledOnce();
+    }
+    for (const change of [{ control: false }, { alt: false }, { shift: false }, { meta: true }, { code: "KeyE", key: "E" }]) {
+      const preventDefault = vi.fn();
+      listener({ preventDefault }, { type: "keyDown", key: "D", code: "KeyD", control: true, alt: true, shift: true, meta: false, ...change });
+      expect(preventDefault).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["app_not_running", "not_focused", "busy", "cleanup_failed"])("preserves native failure %s", async (reason) => {
     mocks.execFile.mockImplementation((_path, _args, _options, callback) => callback(null, reason, ""));
     expect(await invoke(event)).toEqual({ ok: false, reason });
   });
