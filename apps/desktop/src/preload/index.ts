@@ -286,6 +286,7 @@ const daemonAPI = {
 };
 
 const updaterAPI = {
+  installRequiresStoppedRuntime: process.platform === "win32" && process.arch === "x64",
   onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => {
     const handler = (_: unknown, info: { version: string; releaseNotes?: string }) => callback(info);
     ipcRenderer.on("updater:update-available", handler);

@@ -148,6 +148,7 @@ interface DaemonAPI {
 }
 
 interface UpdaterAPI {
+  readonly installRequiresStoppedRuntime: boolean;
   onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => () => void;
   onDownloadProgress: (callback: (progress: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (

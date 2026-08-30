@@ -20,6 +20,9 @@ const ctx = vi.hoisted(() => ({
   quitAndInstall: vi.fn(),
   getVersion: vi.fn(() => "0.3.17"),
   userDataPath: "",
+  appHandlers: new Map<string, Handler>(),
+  quit: vi.fn(),
+  showMessageBox: vi.fn(async () => ({ response: 0 })),
 }));
 
 vi.mock("electron-updater", () => {
@@ -45,12 +48,17 @@ vi.mock("electron", () => ({
   app: {
     getVersion: ctx.getVersion,
     getPath: vi.fn(() => ctx.userDataPath),
+    on: vi.fn((event: string, handler: Handler) => ctx.appHandlers.set(event, handler)),
+    quit: ctx.quit,
   },
+  dialog: { showMessageBox: ctx.showMessageBox },
   BrowserWindow: class BrowserWindow {},
   ipcMain: {
     handle: ctx.ipcHandle,
   },
 }));
+
+vi.mock("./update-install-guard", () => ({ canInstallWindowsUpdate: vi.fn(async () => false) }));
 
 import {
   configureMacX64UpdateChannel,
@@ -167,6 +175,9 @@ describe("setupAutoUpdater", () => {
     ctx.downloadUpdate.mockClear();
     ctx.quitAndInstall.mockClear();
     ctx.getVersion.mockClear();
+    ctx.appHandlers.clear();
+    ctx.quit.mockClear();
+    ctx.showMessageBox.mockClear();
   });
 
   afterEach(() => {
@@ -184,6 +195,45 @@ describe("setupAutoUpdater", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(ctx.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])("guards install-on-quit without stopping an agent (safe=%s)", async (safe) => {
+    setupAutoUpdater(() => null, async () => safe, true);
+    await invokeIpc("updater:get-preferences");
+    emitUpdater("update-downloaded", { version: "0.4.37" });
+    const preventDefault = vi.fn();
+    ctx.appHandlers.get("before-quit")!({ preventDefault });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    if (safe) expect(ctx.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, false);
+    else {
+      expect(ctx.quitAndInstall).not.toHaveBeenCalled();
+      expect(ctx.quit).toHaveBeenCalledOnce();
+    }
+    const secondQuit = vi.fn();
+    ctx.appHandlers.get("before-quit")!({ preventDefault: secondQuit });
+    expect(secondQuit).not.toHaveBeenCalled();
+  });
+
+  it("defers an explicit install when runtime status is unknown", async () => {
+    setupAutoUpdater(() => null, async () => { throw new Error("probe failed"); }, true);
+    await invokeIpc("updater:get-preferences");
+    emitUpdater("update-downloaded", { version: "0.4.37" });
+    await invokeIpc("updater:install");
+    expect(ctx.quitAndInstall).not.toHaveBeenCalled();
+    expect(ctx.quit).not.toHaveBeenCalled();
+    expect(ctx.showMessageBox).toHaveBeenCalledOnce();
+  });
+
+  it("installs a downloaded update once after a successful explicit runtime check", async () => {
+    const check = vi.fn(async () => true);
+    setupAutoUpdater(() => null, check, true);
+    await invokeIpc("updater:get-preferences");
+    await invokeIpc("updater:install");
+    expect(check).not.toHaveBeenCalled();
+    emitUpdater("update-downloaded", { version: "0.4.37" });
+    await invokeIpc("updater:install");
+    expect(ctx.quitAndInstall).toHaveBeenCalledExactlyOnceWith(false, true);
   });
 
   it("skips startup and periodic checks when automatic updates are disabled", async () => {

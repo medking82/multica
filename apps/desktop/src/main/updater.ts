@@ -1,5 +1,6 @@
 import { autoUpdater, type UpdateDownloadedEvent } from "electron-updater";
-import { app, type BrowserWindow, ipcMain } from "electron";
+import { app, type BrowserWindow, dialog, ipcMain } from "electron";
+import { canInstallWindowsUpdate } from "./update-install-guard";
 import type {
   ManualUpdateCheckResult,
   UpdaterPreferences,
@@ -109,7 +110,30 @@ function checkForUpdatesOnce(): Promise<unknown> {
   return p;
 }
 
-export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): void {
+export function setupAutoUpdater(
+  getMainWindow: () => BrowserWindow | null,
+  canInstallUpdate: () => Promise<boolean> = canInstallWindowsUpdate,
+  guardedWindowsInstall = process.platform === "win32" && process.arch === "x64",
+): void {
+  let downloaded = false;
+  let installCheckPending = false;
+  let quitAllowed = false;
+  if (guardedWindowsInstall) {
+    // The built-in quit handler cannot await a process probe. Own the decision
+    // here instead, and never let an unknown/busy runtime trigger an installer.
+    autoUpdater.autoInstallOnAppQuit = false;
+    app.on("before-quit", (event) => {
+      if (!downloaded || quitAllowed) return;
+      event.preventDefault();
+      if (installCheckPending) return;
+      installCheckPending = true;
+      void canInstallUpdate().catch(() => false).then((safe) => {
+        quitAllowed = true;
+        if (safe) autoUpdater.quitAndInstall(true, false);
+        else app.quit(); // Keep the downloaded update for a later, safe quit.
+      }).finally(() => { installCheckPending = false; });
+    });
+  }
   const preferencesFilePath = updaterPreferencesPath(app.getPath("userData"));
   let automaticUpdatesEnabled =
     DEFAULT_UPDATER_PREFERENCES.automaticUpdates;
@@ -185,6 +209,7 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   });
 
   autoUpdater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
+    downloaded = true;
     sendToLiveRenderer(getMainWindow(), "updater:update-downloaded", {
       version: info.version,
       releaseNotes: info.releaseNotes,
@@ -201,7 +226,24 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
     return autoUpdater.downloadUpdate();
   });
 
-  ipcMain.handle("updater:install", () => {
+  ipcMain.handle("updater:install", async () => {
+    if (guardedWindowsInstall) {
+      if (!downloaded || installCheckPending) return;
+      installCheckPending = true;
+      const safe = await canInstallUpdate().catch(() => false);
+      installCheckPending = false;
+      if (!safe) {
+        await dialog.showMessageBox({
+          type: "info",
+          title: "Update waiting for runtime",
+          message: "The bundled Multica runtime is still running, or its status could not be verified.",
+          detail: "Wait for active runs to finish, stop the Desktop runtime, then choose Restart now again. No agent was stopped by this update check.",
+          buttons: ["OK"],
+        });
+        return;
+      }
+      quitAllowed = true;
+    }
     autoUpdater.quitAndInstall(false, true);
   });
 
