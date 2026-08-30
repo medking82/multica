@@ -249,6 +249,10 @@ Do not claim verification passed unless you ran it. If you skip checks because t
 
 ## Commits and Releases
 
+- Fork-only Windows custom Desktop releases use `codex/desktop-custom`, the
+  repository-local `.sop/sop.py`, and `docs/custom-desktop.md`. They publish only
+  `desktop-v*-custom.*` to `medking82/multica`; this exception does not authorize
+  upstream, CLI, Homebrew, or server production releases.
 - Commits should be atomic and use conventional prefixes: `feat(scope)`, `fix(scope)`, `refactor(scope)`, `docs`, `test(scope)`, `chore(scope)`.
 - A production deployment requires a CLI release tag on `main`: create `v0.x.x`, push it, and let `release.yml` publish binaries and the Homebrew tap.
 - Bump patch by default unless the user specifies a version.

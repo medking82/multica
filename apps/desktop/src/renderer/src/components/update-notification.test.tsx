@@ -27,6 +27,7 @@ describe("UpdateNotification", () => {
     Object.defineProperty(window, "updater", {
       configurable: true,
       value: {
+        installRequiresStoppedRuntime: false,
         onUpdateDownloaded: (listener: UpdateDownloadedListener) => {
           updateDownloaded = listener;
           return vi.fn();
@@ -41,6 +42,8 @@ describe("UpdateNotification", () => {
     act(() => updateDownloaded({ version: "0.4.27" }));
 
     expect(screen.queryByRole("button", { name: "Later" })).not.toBeInTheDocument();
+    expect(screen.getByText("v0.4.27 will be applied on next launch.")).toBeInTheDocument();
+    expect(screen.queryByText(/Installation waits/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "See changelog" }));
 
     expect(mocks.openExternal).toHaveBeenCalledWith(
@@ -55,5 +58,16 @@ describe("UpdateNotification", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restart now" }));
 
     expect(mocks.installUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("links custom updates to the fork release and explains runtime deferral", () => {
+    Object.defineProperty(window.updater, "installRequiresStoppedRuntime", { value: true });
+    render(<UpdateNotification />);
+    act(() => updateDownloaded({ version: "0.4.36-custom.2" }));
+    expect(screen.getByText(/Installation waits until the bundled runtime is stopped/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "See changelog" }));
+    expect(mocks.openExternal).toHaveBeenCalledWith(
+      "https://github.com/medking82/multica/releases/tag/desktop-v0.4.36-custom.2",
+    );
   });
 });

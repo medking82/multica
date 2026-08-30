@@ -81,7 +81,7 @@ const destBinary = join(destDir, binName);
 // 0.0.0-g<hash> fallback.
 function git(...args) {
   try {
-    return execFileSync("git", args, { encoding: "utf-8" }).trim();
+    return execFileSync("git", args, { encoding: "utf-8", windowsHide: true }).trim();
   } catch {
     return "";
   }
@@ -89,7 +89,7 @@ function git(...args) {
 
 function hasGo() {
   try {
-    execSync("go version", { stdio: "pipe" });
+    execSync("go version", { stdio: "pipe", windowsHide: true });
     return true;
   } catch {
     return false;
@@ -130,6 +130,7 @@ if (hasGo()) {
     {
       cwd: serverDir,
       stdio: "inherit",
+      windowsHide: true,
       env: {
         ...process.env,
         CGO_ENABLED: "0",

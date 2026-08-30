@@ -9,6 +9,9 @@ type UpdateState =
   | { status: "ready"; version: string };
 
 function changelogUrl(version: string): string {
+  if (/^\d+\.\d+\.\d+-custom\.[1-9]\d*$/.test(version)) {
+    return `https://github.com/medking82/multica/releases/tag/desktop-v${version}`;
+  }
   return `https://multica.ai/changelog#release-${version.replace(/\./g, "-")}`;
 }
 
@@ -44,7 +47,9 @@ export function UpdateNotification() {
         <div className="flex-1 min-w-0">
           <p className="text-body font-medium">Update ready</p>
           <p className="text-caption text-muted-foreground mt-0.5">
-            v{state.version} will be applied on next launch.
+            {window.updater.installRequiresStoppedRuntime === true
+              ? `v${state.version} is ready. Installation waits until the bundled runtime is stopped.`
+              : `v${state.version} will be applied on next launch.`}
           </p>
           <div className="mt-2 flex items-center gap-1.5">
             <button

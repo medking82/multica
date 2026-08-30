@@ -1,4 +1,5 @@
 import { ElectronAPI } from "@electron-toolkit/preload";
+import type { DictationAdapter } from "@multica/core/types/dictation";
 import type { RuntimeConfigResult } from "../shared/runtime-config";
 import type { NavigationGesture } from "../shared/navigation-gestures";
 import type { RendererRouteContextInput } from "../shared/renderer-route-context";
@@ -18,6 +19,8 @@ import type {
 } from "../shared/daemon-types";
 
 interface DesktopAPI {
+  /** Delegates to the user's native Codex dictation UI without audio transport. */
+  dictation: DictationAdapter;
   /** App version + normalized OS, captured synchronously at preload time. */
   appInfo: {
     version: string;
@@ -148,6 +151,7 @@ interface DaemonAPI {
 }
 
 interface UpdaterAPI {
+  readonly installRequiresStoppedRuntime: boolean;
   onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => () => void;
   onDownloadProgress: (callback: (progress: { percent: number }) => void) => () => void;
   onUpdateDownloaded: (

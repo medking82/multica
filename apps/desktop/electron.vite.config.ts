@@ -5,6 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   main: {
+    // The custom artifact contract inspects emitted bindings by name.
+    build: { minify: false },
     plugins: [externalizeDepsPlugin()],
   },
   preload: {
@@ -17,6 +19,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin({ exclude: ["@electron-toolkit/preload"] })],
   },
   renderer: {
+    build: { minify: false },
     server: {
       // Allow parallel worktrees to run `pnpm dev:desktop` side-by-side
       // (e.g. Multica Canary alongside a primary checkout) by overriding

@@ -1,5 +1,6 @@
 import { autoUpdater, type UpdateDownloadedEvent } from "electron-updater";
-import { app, type BrowserWindow, ipcMain } from "electron";
+import { app, type BrowserWindow, dialog, ipcMain } from "electron";
+import { canInstallWindowsUpdate } from "./update-install-guard";
 import type {
   ManualUpdateCheckResult,
   UpdaterPreferences,
@@ -50,6 +51,28 @@ export function configureMacX64UpdateChannel(
 // package.mjs publishes macOS x64 as `latest-x64-mac.yml`; the established
 // arm64 feed and runtime path remain unchanged.
 configureMacX64UpdateChannel(autoUpdater);
+
+/** Custom Windows builds follow only the fork's verified stable update feed.
+ * The custom semver suffix is not an opt-in to GitHub prerelease channels. */
+export function configureCustomWindowsUpdateChannel(
+  updater: Pick<typeof autoUpdater, "channel" | "allowDowngrade" | "allowPrerelease" | "setFeedURL">,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): void {
+  if (platform !== "win32" || arch !== "x64") return;
+  updater.setFeedURL({
+    provider: "github",
+    owner: "medking82",
+    repo: "multica",
+    channel: "latest",
+  });
+  updater.channel = "latest";
+  updater.allowPrerelease = false;
+  // The channel setter enables downgrades; reset it after selecting the feed.
+  updater.allowDowngrade = false;
+}
+
+configureCustomWindowsUpdateChannel(autoUpdater);
 
 const STARTUP_CHECK_DELAY_MS = 5_000;
 const PERIODIC_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -109,7 +132,30 @@ function checkForUpdatesOnce(): Promise<unknown> {
   return p;
 }
 
-export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): void {
+export function setupAutoUpdater(
+  getMainWindow: () => BrowserWindow | null,
+  canInstallUpdate: () => Promise<boolean> = canInstallWindowsUpdate,
+  guardedWindowsInstall = process.platform === "win32" && process.arch === "x64",
+): void {
+  let downloaded = false;
+  let installCheckPending = false;
+  let quitAllowed = false;
+  if (guardedWindowsInstall) {
+    // The built-in quit handler cannot await a process probe. Own the decision
+    // here instead, and never let an unknown/busy runtime trigger an installer.
+    autoUpdater.autoInstallOnAppQuit = false;
+    app.on("before-quit", (event) => {
+      if (!downloaded || quitAllowed) return;
+      event.preventDefault();
+      if (installCheckPending) return;
+      installCheckPending = true;
+      void canInstallUpdate().catch(() => false).then((safe) => {
+        quitAllowed = true;
+        if (safe) autoUpdater.quitAndInstall(true, false);
+        else app.quit(); // Keep the downloaded update for a later, safe quit.
+      }).finally(() => { installCheckPending = false; });
+    });
+  }
   const preferencesFilePath = updaterPreferencesPath(app.getPath("userData"));
   let automaticUpdatesEnabled =
     DEFAULT_UPDATER_PREFERENCES.automaticUpdates;
@@ -185,6 +231,7 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
   });
 
   autoUpdater.on("update-downloaded", (info: UpdateDownloadedEvent) => {
+    downloaded = true;
     sendToLiveRenderer(getMainWindow(), "updater:update-downloaded", {
       version: info.version,
       releaseNotes: info.releaseNotes,
@@ -201,7 +248,24 @@ export function setupAutoUpdater(getMainWindow: () => BrowserWindow | null): voi
     return autoUpdater.downloadUpdate();
   });
 
-  ipcMain.handle("updater:install", () => {
+  ipcMain.handle("updater:install", async () => {
+    if (guardedWindowsInstall) {
+      if (!downloaded || installCheckPending) return;
+      installCheckPending = true;
+      const safe = await canInstallUpdate().catch(() => false);
+      installCheckPending = false;
+      if (!safe) {
+        await dialog.showMessageBox({
+          type: "info",
+          title: "Update waiting for runtime",
+          message: "The bundled Multica runtime is still running, or its status could not be verified.",
+          detail: "Wait for active runs to finish, stop the Desktop runtime, then choose Restart now again. No agent was stopped by this update check.",
+          buttons: ["OK"],
+        });
+        return;
+      }
+      quitAllowed = true;
+    }
     autoUpdater.quitAndInstall(false, true);
   });
 

@@ -123,12 +123,9 @@ win:
   artifactName: multica-desktop-${version}-windows-${arch}.${ext}
 publish:
   provider: github
-  owner: multica-ai
+  owner: medking82
   repo: multica
-  # Align with our CLI release flow which pre-creates a *published* GitHub
-  # Release via `gh release create`. The electron-builder default of
-  # `releaseType: draft` conflicts with `existingType=release` and causes
-  # uploads of the DMG/ZIP/blockmaps/latest-mac.yml to be silently skipped,
-  # which breaks electron-updater auto-update on installed clients.
+  # Custom Windows x64 releases publish only after test and artifact validation.
+  channel: latest
   releaseType: release
 npmRebuild: false
