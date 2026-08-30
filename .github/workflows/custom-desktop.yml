@@ -21,8 +21,6 @@ jobs:
       contents: read
     outputs:
       needed: ${{ steps.prepare.outputs.needed }}
-    env:
-      PAYLOAD: ${{ runner.temp }}/custom-desktop-payload
     steps:
       - name: Checkout custom source without persisted credentials
         uses: actions/checkout@v4
@@ -30,6 +28,11 @@ jobs:
           ref: codex/desktop-custom
           fetch-depth: 0
           persist-credentials: false
+      - name: Initialize build payload path
+        id: payload
+        shell: pwsh
+        run: |
+          "PAYLOAD=$env:RUNNER_TEMP/custom-desktop-payload" >> $env:GITHUB_ENV
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

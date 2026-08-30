@@ -5,6 +5,22 @@ import { createRequire } from "node:module";
 const require = createRequire(new URL("../../packages/core/package.json", import.meta.url));
 const { parse } = require("yaml");
 
+test("build payload is initialized at runner time before any consumer", async () => {
+  const workflow = parse(await readFile(new URL("../../.github/workflows/custom-desktop.yml", import.meta.url), "utf8"));
+  const build = workflow.jobs.build;
+  assert.equal(build.env?.PAYLOAD, undefined, "runner context is unavailable in job-level env");
+  const initializeIndex = build.steps.findIndex((step) => step.id === "payload");
+  assert.ok(initializeIndex >= 0, "Initialize PAYLOAD on the allocated runner");
+  const initialize = build.steps[initializeIndex];
+  assert.equal(initialize.shell, "pwsh");
+  assert.match(initialize.run, /"PAYLOAD=\$env:RUNNER_TEMP\/custom-desktop-payload"\s*>>\s*\$env:GITHUB_ENV/);
+  for (const [index, step] of build.steps.entries()) {
+    if (/\$env:PAYLOAD/.test(step.run ?? "") || step.with?.path === "${{ env.PAYLOAD }}") {
+      assert.ok(index > initializeIndex, `${step.name} must run after PAYLOAD initialization`);
+    }
+  }
+});
+
 test("release separates read-only candidate execution from reviewed privileged publication", async () => {
   const workflow = parse(await readFile(new URL("../../.github/workflows/custom-desktop.yml", import.meta.url), "utf8"));
   assert.equal(workflow.on.schedule[0].cron, "17 */6 * * *");
