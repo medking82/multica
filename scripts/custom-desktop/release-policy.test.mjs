@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   FORK, BRANCH, stableVersion, customVersion, assertNewer, releaseNeeded,
-  assetNames, validatePlan, validateManifest, validateUpdateInfo,
+  assetNames, validatePlan, validateManifest, validateUpdateInfo, validateCliVersionOutput,
 } from "./release-policy.mjs";
 
 const hash = "a".repeat(40);
@@ -15,6 +15,7 @@ const record = { size: 100, sha256: "a".repeat(64), sha512: Buffer.alloc(64).toS
 const manifest = {
   ...plan, platform: "windows-x64", signed: false,
   features: ["workspace-skill-picker", "native-codex-dictation"],
+  inspection: { cliVersion: plan.version },
   assets: Object.fromEntries(assetNames(plan.version).map((name) => [name, { ...record }])),
 };
 
@@ -53,9 +54,22 @@ test("manifest closes repository, architecture, version, and asset boundaries", 
   ]) assert.throws(() => validatePlan({ ...plan, ...overrides }));
   for (const overrides of [
     { platform: "windows-arm64" }, { signed: true }, { features: ["native-codex-dictation"] },
+    { inspection: undefined }, { inspection: { cliVersion: "3ed46eeed" } },
+    { inspection: { cliVersion: "0.4.36-custom.11" } },
     { assets: { ...manifest.assets, "../private.json": record } },
     { assets: Object.fromEntries(assetNames(plan.version).map((name) => [name, { ...record, size: 0 }])) },
   ]) assert.throws(() => validateManifest({ ...manifest, ...overrides }));
+});
+
+test("packaged CLI output must report exactly the planned semantic version", () => {
+  const output = (version) => "multica " + version + " (commit: 3ed46eeed, built: 2026-08-30T11:23:17Z)\r\ngo: go1.26.7, os/arch: windows/amd64\r\n";
+  assert.equal(validateCliVersionOutput(output(plan.version), plan.version), plan.version);
+  for (const version of ["3ed46eeed", "dev", "v0.4.36", "0.4.36-custom.11", "0.4.36-custom.13"]) {
+    assert.throws(() => validateCliVersionOutput(output(version), plan.version));
+  }
+  for (const invalid of ["", "error\n" + output(plan.version), plan.version]) {
+    assert.throws(() => validateCliVersionOutput(invalid, plan.version));
+  }
 });
 
 test("update metadata must describe exactly the verified installer", () => {

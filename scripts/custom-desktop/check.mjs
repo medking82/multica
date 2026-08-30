@@ -42,7 +42,7 @@ assert.ok(["preflight", "quick", "full"].includes(mode));
 await preflight();
 if (mode !== "preflight") {
   run("git", ["diff", "--check"]);
-  run(process.execPath, ["--test", "scripts/custom-desktop/release-policy.test.mjs", "scripts/custom-desktop/release.test.mjs", "scripts/custom-desktop/composer-contract.test.mjs", "scripts/custom-desktop/workflow.test.mjs", "scripts/custom-desktop/update-metadata.test.mjs"]);
+  run(process.execPath, ["--test", "scripts/custom-desktop/release-policy.test.mjs", "scripts/custom-desktop/release.test.mjs", "scripts/custom-desktop/composer-contract.test.mjs", "scripts/custom-desktop/workflow.test.mjs", "scripts/custom-desktop/update-metadata.test.mjs", "scripts/custom-desktop/bundle-cli.test.mjs"]);
   run("pnpm", ["--filter", "@multica/views", "test", "editor/voice-input-button.test.tsx", "editor/content-editor.test.tsx", "editor/extensions/slash-command-extension.test.ts", "editor/extensions/slash-command-suggestion.test.tsx", "modals/create-issue.test.tsx", "modals/quick-create-issue.test.tsx", "chat/components/chat-input.test.tsx", "issues/components/comment-composers.test.tsx"]);
   run("pnpm", ["--filter", "@multica/desktop", "test", "src/main/codex-dictation.test.ts", "src/renderer/src/platform/dictation-adapter.test.ts", "src/main/updater.test.ts", "src/main/update-install-guard.test.ts", "scripts/package.test.mjs"]);
   const caches = JSON.parse(run("go", ["env", "-json", "GOCACHE", "GOMODCACHE"], { capture: true }));

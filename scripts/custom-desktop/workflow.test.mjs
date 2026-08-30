@@ -13,6 +13,8 @@ test("Windows packaging preserves dotted override arguments through PowerShell",
   const prefix = "node apps/desktop/scripts/package.mjs ";
   assert.ok(step.run.startsWith(prefix));
   const version = "0.4.36-custom.123";
+  assert.equal(step.env.MULTICA_CLI_VERSION, "${{ steps.prepare.outputs.version }}",
+    "The bundled Go CLI must receive the same immutable release version as Electron");
   // Keep the workflow's real argument spelling, but replace packaging with a
   // native argv-only probe. No build, agent, account or network is invoked.
   const probe = "& $env:MULTICA_TEST_NODE -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- " + step.run.slice(prefix.length);

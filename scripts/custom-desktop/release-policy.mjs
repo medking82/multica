@@ -72,6 +72,8 @@ export function validatePlan(plan) {
 
 export function validateManifest(manifest) {
   validatePlan(manifest);
+  assert.equal(manifest.inspection?.cliVersion, manifest.version,
+    "Packaged CLI version must match the immutable release plan");
   assert.equal(manifest.platform, "windows-x64");
   assert.equal(manifest.signed, false);
   assert.deepEqual(manifest.features, ["workspace-skill-picker", "native-codex-dictation"]);
@@ -85,6 +87,13 @@ export function validateManifest(manifest) {
     assert.match(record.sha512 ?? "", /^[A-Za-z0-9+/]{86}==$/);
   }
   return manifest;
+}
+
+export function validateCliVersionOutput(output, version) {
+  versionParts(version);
+  const actual = /^multica (\S+) \(commit: [^,\r\n]+, built: [^)\r\n]+\)\r?\n/.exec(output ?? "")?.[1];
+  assert.equal(actual, version, "Packaged CLI --version must match the immutable release plan");
+  return actual;
 }
 
 export function validateUpdateInfo(info, manifest) {

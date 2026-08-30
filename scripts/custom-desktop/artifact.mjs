@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { copyFile, open, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, normalize, resolve } from "node:path";
@@ -6,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { assertComposerContract } from "./composer-contract.mjs";
 import { serializeUpdateMetadata } from "./update-metadata.mjs";
 import { digest } from "./release.mjs";
-import { assetNames, validatePlan, validateManifest, validateUpdateInfo } from "./release-policy.mjs";
+import { assetNames, validatePlan, validateManifest, validateUpdateInfo, validateCliVersionOutput } from "./release-policy.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const desktopRequire = createRequire(new URL("../../apps/desktop/package.json", import.meta.url));
@@ -63,9 +64,15 @@ export async function inspectArtifact(directory, version) {
   assert.equal(asar.statFile(archive, normalize("resources/bin/multica.exe")).unpacked, true);
   assert.equal(await peMachine(join(unpacked, "Multica.exe")), 0x8664);
   assert.equal(await peMachine(cli), 0x8664);
+  // Execute only the read-only version flag in the unprivileged Windows build
+  // job. The publication controller validates the recorded result, never runs it.
+  const cliVersion = validateCliVersionOutput(execFileSync(cli, ["--version"], {
+    encoding: "utf8", windowsHide: true, timeout: 15_000,
+    stdio: ["ignore", "pipe", "pipe"],
+  }), version);
   const cliDigest = await digest(cli);
   assert.equal(cliDigest.sha256, (await digest(join(root, "apps/desktop/resources/bin/multica.exe"))).sha256);
-  return { version, asarSHA256: (await digest(archive)).sha256, cliSHA256: cliDigest.sha256, packagedComposers: 5 };
+  return { version, cliVersion, asarSHA256: (await digest(archive)).sha256, cliSHA256: cliDigest.sha256, packagedComposers: 5 };
 }
 
 const [mode, input, version] = process.argv.slice(2);

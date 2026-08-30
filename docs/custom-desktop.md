@@ -49,6 +49,12 @@ explicit controller update; bootstrap will not overwrite them.
 
 Versions are `<upstream version>-custom.<workflow run number>`, tagged
 `desktop-v<version>`. Published custom releases are not GitHub prereleases.
+The build passes that same immutable version as `MULTICA_CLI_VERSION` to the Go
+bundler, independently of reachable Git tags. This explicit input accepts stable
+or custom Desktop semantic versions; malformed values or missing Go fail closed.
+Normal builds without the variable keep their existing git-derived CLI version.
+Before publication, the final packaged CLI's actual `--version` must match the
+plan exactly, and the manifest records this checked `inspection.cliVersion`.
 The client is pinned to `medking82/multica`, `latest`, with prereleases and
 downgrades disabled. Official updater settings must not replace this feed.
 
@@ -68,8 +74,10 @@ caches. The build guard examines the actual `app.asar`, all five composed editor
 bindings, native-only adapter, bundled x64 CLI, feed configuration, and hashes.
 The metadata conversion is checked with electron-updater's actual YAML parser;
 an offline GitHubProvider test covers custom tag and asset URL resolution. The
-pure Node policy tests can also run directly with `node --test
-scripts/custom-desktop/*.test.mjs` after installing dependencies on any platform.
+Node release tests can also run directly with `node --test
+scripts/custom-desktop/*.test.mjs` after installing dependencies and Go 1.26 on
+any platform. The tagless-checkout regression compiles only a tiny local Go
+fixture with network and toolchain downloads disabled, not a real agent.
 Bundled guards intentionally require unminified output, explicitly pinned in
 `electron.vite.config.ts`. A future compiler/name change can stop publication and
 requires an inspected guard update; it must not weaken negative regression tests.
