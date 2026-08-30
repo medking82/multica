@@ -2,8 +2,33 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 const require = createRequire(new URL("../../packages/core/package.json", import.meta.url));
 const { parse } = require("yaml");
+
+test("Windows packaging preserves dotted override arguments through PowerShell", { skip: process.platform !== "win32" }, async () => {
+  const workflow = parse(await readFile(new URL("../../.github/workflows/custom-desktop.yml", import.meta.url), "utf8"));
+  const step = workflow.jobs.build.steps.find((entry) => entry.name === "Package Windows x64 custom installer");
+  assert.equal(step.shell ?? "pwsh", "pwsh");
+  const prefix = "node apps/desktop/scripts/package.mjs ";
+  assert.ok(step.run.startsWith(prefix));
+  const version = "0.4.36-custom.123";
+  // Keep the workflow's real argument spelling, but replace packaging with a
+  // native argv-only probe. No build, agent, account or network is invoked.
+  const probe = "& $env:MULTICA_TEST_NODE -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- " + step.run.slice(prefix.length);
+  const result = spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", probe], {
+    env: { ...process.env, MULTICA_TEST_NODE: process.execPath, CUSTOM_VERSION: version },
+    encoding: "utf8", windowsHide: true, timeout: 15_000,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), [
+    "--win", "--x64", "--publish", "never",
+    `-c.extraMetadata.version=${version}`,
+    "-c.win.signAndEditExecutable=false",
+    "-c.publish.channel=latest",
+  ]);
+});
 
 test("build payload is initialized at runner time before any consumer", async () => {
   const workflow = parse(await readFile(new URL("../../.github/workflows/custom-desktop.yml", import.meta.url), "utf8"));
