@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertComposerContract } from "./composer-contract.mjs";
+import { assertDesktopSafetyContract } from "./desktop-safety-contract.mjs";
 import { serializeUpdateMetadata } from "./update-metadata.mjs";
 import { digest } from "./release.mjs";
 import { assetNames, validatePlan, validateManifest, validateUpdateInfo, validateCliVersionOutput } from "./release-policy.mjs";
@@ -53,6 +54,7 @@ export async function inspectArtifact(directory, version) {
     assert.ok(!renderer.includes(banned), `Unapproved transcription draft found: ${banned}`);
   }
   assertComposerContract(renderer);
+  assertDesktopSafetyContract({ main, preload, renderer });
   const feed = yaml.parse(await readFile(join(unpacked, "resources/app-update.yml"), "utf8"));
   assert.equal(feed.provider, "github");
   assert.equal(feed.owner, "medking82");

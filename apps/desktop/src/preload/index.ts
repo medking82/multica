@@ -6,6 +6,7 @@ import type { FreezeBreadcrumb } from "../shared/freeze-breadcrumb";
 import type {
   ManualUpdateCheckResult,
   UpdaterPreferences,
+  UpdateInstallState,
 } from "../shared/updater-types";
 import {
   RENDERER_ROUTE_CONTEXT_CHANNEL,
@@ -22,6 +23,7 @@ import {
 } from "../shared/issue-window";
 import { AUTH_SESSION_STATE_CHANNEL } from "../shared/auth-session";
 import { CODEX_DICTATION_CHANNEL } from "../shared/dictation";
+import { installCodexDictationActivation } from "./dictation-activation";
 import type {
   DaemonStatus,
   LocalRuntimeProbe,
@@ -312,7 +314,13 @@ const updaterAPI = {
     return () => ipcRenderer.removeListener("updater:update-downloaded", handler);
   },
   downloadUpdate: () => ipcRenderer.invoke("updater:download"),
-  installUpdate: () => ipcRenderer.invoke("updater:install"),
+  installUpdate: (): Promise<UpdateInstallState> => ipcRenderer.invoke("updater:install"),
+  getInstallState: (): Promise<UpdateInstallState> => ipcRenderer.invoke("updater:get-install-state"),
+  onInstallStateChanged: (callback: (state: UpdateInstallState) => void) => {
+    const handler = (_: unknown, state: UpdateInstallState) => callback(state);
+    ipcRenderer.on("updater:install-state", handler);
+    return () => ipcRenderer.removeListener("updater:install-state", handler);
+  },
   getPreferences: (): Promise<UpdaterPreferences> =>
     ipcRenderer.invoke("updater:get-preferences"),
   setAutomaticUpdates: (enabled: boolean): Promise<UpdaterPreferences> =>
@@ -326,6 +334,15 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld("desktopAPI", desktopAPI);
   contextBridge.exposeInMainWorld("daemonAPI", daemonAPI);
   contextBridge.exposeInMainWorld("updater", updaterAPI);
+  if (process.platform === "win32") {
+    try {
+      installCodexDictationActivation();
+    } catch {
+      // Optional dictation must not take down the rest of the Desktop bridges.
+      // Main still fails closed if the isolated activation consumer is absent.
+      console.warn("[dictation] activation_unavailable");
+    }
+  }
 } else {
   // @ts-expect-error - fallback for non-isolated context
   window.electron = electronAPI;

@@ -102,6 +102,7 @@
       "app_not_running": "Open the Codex/ChatGPT Windows desktop app and stay signed in, then try again. The Codex CLI alone cannot provide global dictation.",
       "not_focused": "Keep this Multica window and input focused, then try again.",
       "busy": "Release any held shortcut keys, wait a moment, and try again.",
+      "cleanup_failed": "Some shortcut keys could not be released. Press and release Ctrl, Alt, Shift and D before typing. Check Codex dictation before toggling again.",
       "unavailable": "Couldn't open Codex dictation. Try Ctrl+Alt+Shift+D manually. No audio was sent to a Multica transcription API.",
       "editor_not_ready": "The editor isn't ready yet. Try again."
     }

@@ -93,7 +93,9 @@ func run(args []string, p platform) string {
 		for i := len(held) - 1; i >= 0; i-- {
 			release = append(release, keyEvent{key: held[i], up: true})
 		}
-		p.sendKeys(release)
+		if p.sendKeys(release) != len(release) {
+			return "cleanup_failed"
+		}
 	}
 	return "unavailable"
 }

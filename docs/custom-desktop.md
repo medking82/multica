@@ -18,6 +18,10 @@ copy ChatGPT credentials, or alter server accounts, projects, agents, or data.
   and any subscription limits still depend on the user's Codex account.
 - The helper's success means the shortcut was dispatched, not that audio was
   recognized or text was inserted. A real audio smoke test is user-operated.
+- Each dispatch requires one short-lived trusted mic activation in the isolated
+  preload world. An unconsumed fixed chord is blocked before Chromium can insert
+  an AltGr character. Partial key cleanup failure is reported without retrying.
+  See [native dictation](../apps/desktop/docs/native-dictation.md) for the limits.
 
 ## Update flow
 
@@ -64,6 +68,10 @@ CLI process is present or its status cannot be checked. The update check never
 stops an agent. Wait for runs to finish and stop the Desktop runtime, then quit
 or choose **Restart now**. Closing a busy Desktop can leave the runtime running
 under its existing preference; that intentionally also leaves the update pending.
+Pending/deferred state survives a renderer remount and reports bounded probe
+diagnostics. Installation is authorized only after a successful final app quit,
+not a cancelled quit attempt. See [the install guard](../apps/desktop/docs/windows-update-install-guard.md)
+for the native Windows and Electron smoke fixtures and remaining manual checks.
 
 ## Validation and limitations
 
@@ -72,6 +80,8 @@ regressions, typechecks, control-policy tests, and isolated helper/CLI tests.
 Go CLI tests receive dedicated `HOME` **and** `USERPROFILE` plus existing build
 caches. The build guard examines the actual `app.asar`, all five composed editor
 bindings, native-only adapter, bundled x64 CLI, feed configuration, and hashes.
+It also rejects missing isolated-activation, input-chord, cleanup-status, final-
+quit and install-state bindings; deleting one has a negative regression test.
 The metadata conversion is checked with electron-updater's actual YAML parser;
 an offline GitHubProvider test covers custom tag and asset URL resolution. The
 Node release tests can also run directly with `node --test

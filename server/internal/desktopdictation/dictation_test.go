@@ -7,14 +7,15 @@ import (
 )
 
 type fakePlatform struct {
-	ready    bool
-	running  bool
-	window   uintptr
-	down     uint16
-	sent     int
-	calls    [][]keyEvent
-	checks   int
-	switchAt int
+	ready       bool
+	running     bool
+	window      uintptr
+	down        uint16
+	sent        int
+	calls       [][]keyEvent
+	checks      int
+	switchAt    int
+	cleanupSent *int
 }
 
 func (f *fakePlatform) available() bool         { return f.ready }
@@ -31,6 +32,9 @@ func (f *fakePlatform) sendKeys(keys []keyEvent) int {
 	f.calls = append(f.calls, append([]keyEvent(nil), keys...))
 	if len(f.calls) == 1 {
 		return f.sent
+	}
+	if f.cleanupSent != nil {
+		return *f.cleanupSent
 	}
 	return len(keys)
 }
@@ -51,6 +55,19 @@ func TestInvalidRequestsNeverReachNativeCode(t *testing.T) {
 				t.Fatalf("status = %q, want unavailable", got)
 			}
 		})
+	}
+}
+
+func TestFailedCleanupReportsHeldKeysWithoutAnotherToggle(t *testing.T) {
+	f := healthyPlatform()
+	f.sent = 4
+	count := 2
+	f.cleanupSent = &count
+	if got := run([]string{"toggle", "42"}, f); got != "cleanup_failed" {
+		t.Fatalf("status = %q, want cleanup_failed", got)
+	}
+	if len(f.calls) != 2 {
+		t.Fatalf("got %d calls; want one chord and one release attempt", len(f.calls))
 	}
 }
 

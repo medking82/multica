@@ -95,6 +95,7 @@
       "app_not_running": "Windows 版 Codex/ChatGPT デスクトップアプリを開いてログインし、もう一度お試しください。Codex CLI だけではグローバル音声入力を利用できません。",
       "not_focused": "この Multica ウィンドウと入力欄を選択して、もう一度お試しください。",
       "busy": "押しているショートカットキーを離し、少し待ってからお試しください。",
+      "cleanup_failed": "一部のキーを解放できませんでした。入力前に Ctrl、Alt、Shift、D を押して離してください。再度切り替える前に Codex の音声入力状態を確認してください。",
       "unavailable": "Codex の音声入力を開けませんでした。Ctrl+Alt+Shift+D を手動でお試しください。Multica の文字起こし API には音声を送信していません。",
       "editor_not_ready": "入力欄の準備ができていません。もう一度お試しください。"
     }
