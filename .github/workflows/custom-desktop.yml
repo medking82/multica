@@ -1,0 +1,109 @@
+name: Custom Desktop Release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-desktop-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'medking82/multica' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/desktop-custom')
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      needed: ${{ steps.prepare.outputs.needed }}
+    env:
+      PAYLOAD: ${{ runner.temp }}/custom-desktop-payload
+    steps:
+      - name: Checkout custom source without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: codex/desktop-custom
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Resolve stable upstream and prepare immutable candidate
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/custom-desktop/release.mjs prepare "$env:PAYLOAD"
+      - name: Setup Go
+        if: steps.prepare.outputs.needed == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+          cache-dependency-path: server/go.sum
+      - name: Setup pnpm
+        if: steps.prepare.outputs.needed == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - name: Install pinned dependencies
+        if: steps.prepare.outputs.needed == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Validate both features and update guards
+        if: steps.prepare.outputs.needed == 'true'
+        run: node scripts/custom-desktop/check.mjs full
+      - name: Package Windows x64 custom installer
+        if: steps.prepare.outputs.needed == 'true'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          CUSTOM_VERSION: ${{ steps.prepare.outputs.version }}
+        run: node apps/desktop/scripts/package.mjs --win --x64 --publish never "-c.extraMetadata.version=$env:CUSTOM_VERSION" -c.win.signAndEditExecutable=false -c.publish.channel=latest
+      - name: Inspect final ASAR, five composers, CLI, update metadata and hashes
+        if: steps.prepare.outputs.needed == 'true'
+        run: node scripts/custom-desktop/artifact.mjs payload "$env:PAYLOAD"
+      - name: Transfer only the verified release payload
+        if: steps.prepare.outputs.needed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-desktop-verified
+          path: ${{ env.PAYLOAD }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    if: needs.build.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      # Run the controller that defined this workflow, not the newly merged
+      # candidate or any executable/dependency from the build artifact.
+      - name: Checkout reviewed controller
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          # Canonical merge/ancestry checks must not stop at a shallow graft.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download this run's verified payload
+        uses: actions/download-artifact@v4
+        with:
+          name: custom-desktop-verified
+          path: ${{ runner.temp }}/custom-desktop-payload
+      - name: Validate branch and hashes, then publish the complete draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAYLOAD: ${{ runner.temp }}/custom-desktop-payload
+        run: node scripts/custom-desktop/release.mjs publish "$PAYLOAD"
