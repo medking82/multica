@@ -34,7 +34,7 @@ ROLES = {
         'net': 'none', 'restart': 'unless-stopped',
         'mounts': [(TOOLS, '/opt/agent-tools', False), (REPORTS, '/opt/validation-results', True), (BROWSERS, '/opt/browser-tools', False)]},
     'login': {'project': LOGIN, 'service': 'login', 'image': 'login', 'uid': 1000,
-        'cpus': 2, 'ram': 3, 'pids': 512, 'shm': 512, 'tmp': '512m',
+        'cpus': 2, 'ram': 3, 'pids': 1024, 'shm': 512, 'tmp': '512m',
         'net': LOGIN + '_default', 'restart': 'no',
         'mounts': [(PROFILE, '/home/browser', True), (STATE, '/opt/browser-state', True), (BROWSERS, '/opt/browser-tools', False)]},
     'login-validator': {'project': LOGIN, 'service': 'validator', 'image': 'login', 'uid': 1002,

@@ -36,6 +36,22 @@ def fixture(project):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_human_browser_has_bounded_thread_headroom(self):
+        # Linux pids.max counts threads as well as processes. Real login profiles
+        # exhausted 512 while tabs and extensions were loading.
+        self.assertEqual(policy.ROLES['login']['pids'], 1024)
+        self.assertEqual({role: item['pids'] for role, item in policy.ROLES.items()
+                          if role != 'login'},
+                         {'runtime': 512, 'updater': 64, 'validator': 512,
+                          'login-validator': 512})
+        config = fixture(policy.LOGIN)
+        config['services']['login']['pids_limit'] = 1024
+        policy.check_config(config)
+        for limit in (512, -1, 0, 2048):
+            config['services']['login']['pids_limit'] = limit
+            with self.subTest(limit=limit), self.assertRaisesRegex(ValueError, 'resource'):
+                policy.check_config(config)
+
     def test_exact_two_project_configs(self):
         policy.check_config(fixture(policy.RUNTIME))
         policy.check_config(fixture(policy.LOGIN))
