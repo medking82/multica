@@ -10,6 +10,9 @@
 !.assets/codex-bundle/codex-path/rg
 !.assets/codex-bundle/codex-resources
 !.assets/codex-bundle/codex-resources/bwrap
+!.assets/codex-bundle/codex-resources/zsh
+!.assets/codex-bundle/codex-resources/zsh/bin
+!.assets/codex-bundle/codex-resources/zsh/bin/zsh
 !.assets/codex-bundle/codex-package.json
 !verify-codex-bundle.py
 !codex-bundle.sha256

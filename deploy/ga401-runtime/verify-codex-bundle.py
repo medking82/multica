@@ -1,10 +1,11 @@
-"""Verify the pinned native package, without loading credentials or starting Codex."""
+"""Verify the pinned native package; optional executable probes never run inference."""
 import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 
 MANIFEST = {
@@ -17,8 +18,9 @@ MANIFEST = {
     "pathDir": "codex-path",
 }
 FILES = {"bin/codex", "bin/codex-code-mode-host", "codex-path/rg",
-         "codex-resources/bwrap", "codex-package.json"}
-DIRECTORIES = {"bin", "codex-path", "codex-resources"}
+         "codex-resources/bwrap", "codex-resources/zsh/bin/zsh", "codex-package.json"}
+DIRECTORIES = {"bin", "codex-path", "codex-resources", "codex-resources/zsh",
+               "codex-resources/zsh/bin"}
 
 
 def require(condition, message):
@@ -51,7 +53,8 @@ def verify_bundle(root, hashes, entrypoint=None):
             continue
         require(stat.S_ISREG(mode), "Package regular file required: " + name)
         if os.name == "posix" and name != "codex-package.json":
-            require(mode & 0o111 == 0o111, "Package executable bits missing: " + name)
+            require(mode & 0o111 and os.access(item, os.X_OK),
+                    "Package is not executable by the checking user: " + name)
         with item.open("rb") as stream:
             digest = hashlib.file_digest(stream, "sha256").hexdigest()
         require(digest == hashes[name], "Package SHA-256 mismatch: " + name)
@@ -62,14 +65,57 @@ def verify_bundle(root, hashes, entrypoint=None):
                 "Codex entrypoint does not resolve inside the complete package")
 
 
+def optional_zsh_gap(zsh_path, result, features):
+    """Admit only the observed unused zsh-fork ABI gap, never an unknown failure."""
+    rows = [line.split() for line in features.splitlines()
+            if line.split() and line.split()[0] == "shell_zsh_fork"]
+    require(rows == [["shell_zsh_fork", "under", "development", "false"]],
+            "Bundled zsh failed and zsh-fork is enabled or its feature state is unknown")
+    expected = {
+        f"{zsh_path}: /lib/x86_64-linux-gnu/{library}.so.6: version `GLIBC_2.38' "
+        f"not found (required by {zsh_path})" for library in ("libc", "libm")
+    }
+    require(result.returncode == 1 and not result.stdout
+            and len(result.stderr.splitlines()) == 2
+            and set(result.stderr.splitlines()) == expected,
+            "Unexpected bundled zsh failure: " + result.stderr.strip())
+
+
+def probe_companions(root):
+    def run(relative_path, *arguments):
+        return subprocess.run([str(root / relative_path), *arguments],
+                              capture_output=True, text=True, timeout=30, check=False)
+
+    for relative_path, argument in (("bin/codex-code-mode-host", "--help"),
+                                    ("codex-path/rg", "--version"),
+                                    ("codex-resources/bwrap", "--version")):
+        result = run(relative_path, argument)
+        require(result.returncode == 0, relative_path + " probe failed: " + result.stderr.strip())
+        print(relative_path + " executable PASS")
+    zsh_path = root / "codex-resources/zsh/bin/zsh"
+    result = run("codex-resources/zsh/bin/zsh", "--version")
+    if result.returncode == 0:
+        print("Bundled zsh executable PASS")
+        return
+    features = run("bin/codex", "features", "list")
+    require(features.returncode == 0, "Cannot determine Codex feature state")
+    optional_zsh_gap(zsh_path, result, features.stdout)
+    print("OPTIONAL_UNSUPPORTED: bundled zsh needs GLIBC_2.38; shell_zsh_fork is false. "
+          "Default Bash/Code Mode must pass separately; do not enable zsh-fork on this base.",
+          file=sys.stderr)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--entrypoint", type=Path)
+    parser.add_argument("--probe", action="store_true", help="Run non-inference companion probes")
     args = parser.parse_args()
     try:
         verify_bundle(args.root, pinned_hashes(), args.entrypoint)
-        print("Codex 0.151.0 complete package PASS (5 pinned files)")
-    except (OSError, ValueError) as error:
+        print(f"Codex 0.151.0 complete package PASS ({len(FILES)} pinned files)")
+        if args.probe:
+            probe_companions(args.root)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         print("Codex package FAIL: " + str(error), file=sys.stderr)
         sys.exit(1)

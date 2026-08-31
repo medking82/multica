@@ -3,6 +3,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("policy", Path(__file__).with_name("verify-runtime.py"))
 policy = importlib.util.module_from_spec(spec)
@@ -14,6 +15,7 @@ def valid_config():
         "name": policy.PROJECT,
         "services": {"runtime": {
             "image": policy.IMAGE, "user": "1000:1000", "init": True, "read_only": True,
+            "pull_policy": "never",
             "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true", "seccomp=./seccomp-profile.json"],
             "cpus": 6, "mem_limit": 8 * 1024**3, "memswap_limit": 8 * 1024**3,
             "pids_limit": 512, "shm_size": 1024**3,
@@ -29,6 +31,7 @@ def valid_config():
 
 def valid_inspect():
     return [{
+        "Image": policy.IMAGE_ID,
         "Config": {"Image": policy.IMAGE, "User": "1000:1000", "Env": [],
                    "Labels": {"io.hankee.owner": policy.PROJECT}},
         "HostConfig": {"ReadonlyRootfs": True, "CapDrop": ["ALL"], "Init": True,
@@ -44,6 +47,25 @@ def valid_inspect():
 
 
 class IsolationPolicyTests(unittest.TestCase):
+    def test_rejects_same_tag_with_different_image_digest(self):
+        items = valid_inspect()
+        items[0]["Image"] = "sha256:" + "0" * 64
+        with self.assertRaisesRegex(ValueError, "digest"):
+            policy.check_inspect(items)
+
+    def test_rejects_implicit_build_or_pull(self):
+        for key, value in (("build", {"context": "."}), ("pull_policy", "always")):
+            with self.subTest(key=key):
+                config = valid_config()
+                config["services"]["runtime"][key] = value
+                with self.assertRaisesRegex(ValueError, "pull or build"):
+                    policy.check_config(config)
+
+    def test_rejects_changed_seccomp_content_before_deploy(self):
+        with patch.object(policy.Path, "read_text", return_value='{"defaultAction":"SCMP_ACT_ALLOW"}'):
+            with self.assertRaisesRegex(ValueError, "seccomp content"):
+                policy.check_config(valid_config())
+
     def test_accepts_engine_named_volume(self):
         policy.check_inspect(valid_inspect())
 

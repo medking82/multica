@@ -5,6 +5,7 @@ target=/home/marck/services/multica-runtime/releases/codex-bundle-20260831-3
 base=multica-ga401-runtime:20260831-1
 expected=sha256:b30ec9ff066de2b0188fda7c2e1258f2782b530377d07257e3410495046c7287
 [[ "$(docker image inspect "$base" --format '{{.Id}}')" == "$expected" ]] || exit 1
+docker compose config --format json | python3 verify-runtime.py config
 python3 verify-codex-bundle.py .assets/codex-bundle
 docker build --pull=false --network=none --file Dockerfile.codex-bundle \
   --tag multica-ga401-runtime:20260831-3 .

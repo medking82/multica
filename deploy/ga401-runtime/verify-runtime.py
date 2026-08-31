@@ -1,10 +1,13 @@
 """Check rendered Compose/inspect JSON without printing credentials or mutating Docker."""
+import hashlib
 import json
 from pathlib import Path
 import sys
 
 PROJECT = "multica-ga401-runtime"
 IMAGE = PROJECT + ":20260831-3"
+IMAGE_ID = "sha256:fdb46cfe7d838a3c7c246106ca2fa330fcb9578b915b58adb264f2d222562f94"
+SECCOMP_SHA256 = "c2b7657251810e440a02bdaa1d6080942ce286c7dfb8b36834805c2fdc7f5805"
 VOLUME = PROJECT + "_runtime-home"
 NETWORK = PROJECT + "_default"
 
@@ -14,11 +17,21 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def pinned_seccomp():
+    profile = json.loads(Path(__file__).with_name("seccomp-profile.json").read_text())
+    digest = hashlib.sha256(json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    require(digest == SECCOMP_SHA256, "Pinned seccomp content changed")
+    return profile
+
+
 def check_config(config):
+    pinned_seccomp()
     require(config.get("name") == PROJECT, "Wrong Compose project")
     require(set(config.get("services", {})) == {"runtime"}, "Unexpected services")
     service = config["services"]["runtime"]
     require(service.get("image") == IMAGE, "Unexpected image")
+    require(service.get("pull_policy") == "never" and not service.get("build"),
+            "Candidate deployment must not pull or build another image")
     require(service.get("user") == "1000:1000", "Non-root identity required")
     require(service.get("read_only") is True, "Read-only root required")
     require(service.get("init") is True, "Init required")
@@ -61,6 +74,7 @@ def check_config(config):
 def check_inspect(items):
     require(len(items) == 1, "Exactly one runtime container required")
     item = items[0]
+    require(item.get("Image") == IMAGE_ID, "Live image digest differs from verified candidate")
     config, host = item["Config"], item["HostConfig"]
     require(config.get("Image") == IMAGE, "Unexpected live image")
     require(config.get("User") == "1000:1000", "Unexpected live identity")
@@ -86,7 +100,7 @@ def check_inspect(items):
     seccomp_values = [value.removeprefix("seccomp=") for value in security
                       if value.startswith("seccomp=")]
     require(len(seccomp_values) == 1, "Exactly one live seccomp policy required")
-    expected_seccomp = json.loads(Path(__file__).with_name("seccomp-profile.json").read_text())
+    expected_seccomp = pinned_seccomp()
     require(json.loads(seccomp_values[0]) == expected_seccomp, "Live seccomp differs from reviewed profile")
     mounts = item.get("Mounts", [])
     require(len(mounts) == 1 and mounts[0].get("Type") == "volume"

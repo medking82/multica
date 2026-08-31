@@ -28,16 +28,19 @@ snapshot() {
 
 # Snapshot the complete native distribution. The main binary locates its Code Mode
 # helper/resources relative to the package, not through the system PATH.
+bundle_source=/home/marck/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl
+# Reconcile the allowlist with the source too: do not silently omit a new companion.
+python3 verify-codex-bundle.py "$bundle_source"
 for directory in .assets/codex-bundle .assets/codex-bundle/bin \
-                 .assets/codex-bundle/codex-path .assets/codex-bundle/codex-resources; do
+                 .assets/codex-bundle/codex-path .assets/codex-bundle/codex-resources \
+                 .assets/codex-bundle/codex-resources/zsh .assets/codex-bundle/codex-resources/zsh/bin; do
   [[ ! -L "$directory" ]] || { echo 'Refusing symlinked package directory.' >&2; exit 1; }
   install -d -m 0755 "$directory"
 done
-bundle_source=/home/marck/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl
 # Git archives produced on Windows may give the checksum list CRLF endings.
 while IFS=$' \t\r' read -r expected relative; do
   case "$relative" in
-    bin/codex|bin/codex-code-mode-host|codex-path/rg|codex-resources/bwrap|codex-package.json) ;;
+    bin/codex|bin/codex-code-mode-host|codex-path/rg|codex-resources/bwrap|codex-resources/zsh/bin/zsh|codex-package.json) ;;
     *) echo 'Unexpected package member.' >&2; exit 1 ;;
   esac
   snapshot "$bundle_source/$relative" "codex-bundle/$relative" "$expected"

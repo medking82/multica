@@ -86,7 +86,7 @@ can stop only this Compose project, preserving its home volume and all existing 
 | Component | Version/source |
 | --- | --- |
 | Multica CLI | Official `v0.4.36`, Linux amd64 release and published SHA-256 |
-| Codex | GA401-installed `0.151.0` complete native package, five hashed files |
+| Codex | GA401-installed `0.151.0` complete native package, six hashed files |
 | Claude Code | GA401-installed `2.1.251` native executable, hashed snapshot |
 | Antigravity | GA401-installed `1.1.22` native executable, hashed snapshot |
 | Node | Official Node 22 bookworm-slim image, pinned amd64 manifest digest |
@@ -105,10 +105,26 @@ Playwright browser revisions different from this image's preinstalled version.
 The first execution smoke, POC-5, exposed a packaging omission: authentication and
 model inference succeeded, but the standalone main binary could not locate
 `codex-code-mode-host`. Codex 0.151.0 is a package, not just one executable. Keep its
-`bin/codex`, `bin/codex-code-mode-host`, `codex-path/rg`, `codex-resources/bwrap`, and
-`codex-package.json` together. The CLI symlink resolves to that complete package.
+`bin/codex`, `bin/codex-code-mode-host`, `codex-path/rg`, `codex-resources/bwrap`,
+`codex-resources/zsh/bin/zsh`, and `codex-package.json` together. The CLI symlink
+resolves to that complete package.
 `verify-codex-bundle.py` checks the allowlisted layout, manifest, executable modes,
-and all five hashes; it rejects missing companions, mixed versions and extra files.
+and all six hashes in both the source and installed package; it rejects missing
+companions, mixed versions and extra files.
+
+Compatibility limit: the bundled patched zsh needs GLIBC 2.38 while v1 bookworm
+provides 2.36. It is not used by the current default Bash path: Codex 0.151.0
+requires `shell_zsh_fork` for both session-shell and unified-exec zsh selection,
+and that flag is false in both the clean candidate and the live profile.
+The executable probe still runs zsh and reports `OPTIONAL_UNSUPPORTED` only for
+this exact loader error and a verified disabled flag; an enabled/unknown flag or
+any different failure remains fatal. Do not enable this experimental feature on
+this base. No feature is disabled or configuration rewritten by this repair.
+The full-package hash check and mandatory helper probes remain required, followed
+by actual default-path command execution in POC-5; an optional warning alone does
+not demonstrate working Code Mode. This boundary avoids an unrelated base upgrade.
+Sources: [0.151.0 session shell selection](https://github.com/openai/codex/blob/rust-v0.151.0/codex-rs/core/src/session/session.rs#L1116),
+[0.151.0 unified-exec mode](https://github.com/openai/codex/blob/rust-v0.151.0/codex-rs/tools/src/tool_config.rs#L41).
 
 For the authorized packaging-only repair, use a separate source directory at
 `/home/marck/services/multica-runtime/releases/codex-bundle-20260831-3`. Do not use
@@ -127,10 +143,25 @@ network access, then verifies inherited layers and runtime configuration. This
 build changes no running service and has no credentialed volume mounted. The
 canonical `Dockerfile` also includes the complete package for future fresh builds;
 the repair uses `Dockerfile.codex-bundle`, not an apt/npm refresh.
+The deployment Compose has no build directive and uses `pull_policy: never`.
+`verify-runtime.py` pins the actual candidate image ID and the canonical seccomp
+content hash; record and update the candidate ID after a reviewed rebuild.
 
 Run the candidate's executable/browser smoke using a disposable tmpfs home, never
-the live named volume. It must run as UID 1000 with the existing sandbox/seccomp
-and resource limits. After deterministic checks and the independent packaging
+the live named volume. It runs as UID 1000, executes the Code Mode helper's help
+command and bundled rg/bwrap/zsh version probes, and retains the sandbox/seccomp:
+
+```sh
+docker run --rm --network none --user 1000:1000 --init --read-only --cap-drop ALL \
+  --security-opt no-new-privileges=true --security-opt seccomp=./seccomp-profile.json \
+  --pids-limit 512 --cpus 6 --memory 8g --memory-swap 8g --shm-size 1g \
+  --tmpfs /tmp:rw,nosuid,nodev,size=1g,mode=1777 \
+  --tmpfs /home/agent:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700 \
+  --entrypoint /opt/runtime/smoke.sh multica-ga401-runtime:20260831-3
+```
+
+These probes do not prove authenticated Code Mode execution; that remains the
+post-restart POC-5 gate. After deterministic checks and the independent packaging
 review, verify that GA401 has no active task or provider process before replacement:
 
 ```sh
@@ -146,22 +177,23 @@ status, then retry the projectless Codex smoke and inspect actual Linux command
 output and its ticket result. A completed Run that reports blocked tools is a fail.
 Keep the v1 image and original v1 Compose as manual rollback references; do not
 delete a volume, copy logins, change sandbox settings, or roll back automatically.
+For this repair, the exact v1 Compose, seccomp and verifier were saved on GA401 at
+`/home/marck/services/multica-runtime/releases/codex-bundle-20260831-3/rollback-v1/`.
+They come from commit `d782cc6d8c917942cc3c0524060c2626cc78ff86`, not the parent
+directory's pending v2 files. A rollback still requires current operator authority.
 
 This repair does not upgrade provider versions or enable automatic updates.
 Updating a CLI on the GA401 host does not update the immutable container snapshot.
 
-## Operator commands
+## Initial installation and login reference
 
-Run only on GA401 from `/home/marck/services/multica-runtime`:
-
-```sh
-bash prepare-assets.sh
-docker compose config --format json | python3 verify-runtime.py config
-python3 -m unittest discover -p 'test_*.py'
-docker compose build runtime
-# This smoke command neither logs in nor starts Multica.
-docker compose run --rm --no-deps --entrypoint /opt/runtime/smoke.sh runtime
-```
+This section describes first setup, not the packaging repair of an activated home.
+For a future fresh image, `prepare-assets.sh` without `--codex-only` snapshots all
+providers for the canonical Dockerfile. Use a new candidate image tag and repeat
+the review/validation process; do not overwrite this verified repair tag with a
+fresh apt/npm build. The deployment Compose intentionally has no build directive.
+Always use the tmpfs-home smoke above, even before activation. Never use Compose
+run for smoke: it attaches the project's named (possibly credentialed) home volume.
 
 Provider login is intentionally not automated in these build commands. Codex supports
 `codex login --device-auth`; Claude and Antigravity use their native remote login
@@ -172,7 +204,8 @@ for all three providers. `/opt/runtime/browser-mcp.sh` launches a private headle
 sandboxed Chromium session without a listening port. The smoke harness verifies both
 the Playwright API and MCP initialization/tool discovery/local page navigation.
 
-After review, `docker compose up -d runtime` starts only the waiting container. Use
+For a new, unactivated home only, starting the reviewed image starts a waiting
+container; an already activated home starts its daemon immediately. Use
 `docker compose exec runtime bash` for native logins:
 
 ```sh
