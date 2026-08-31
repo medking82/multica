@@ -181,7 +181,7 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email string) (user db.U
 		return db.User{}, false, auth.ErrTemporarilyDisabledUser
 	}
 
-	if err := h.checkSignupAllowed(email, isNew); err != nil {
+	if err := h.checkSignupAllowedWithInvitation(ctx, email, isNew); err != nil {
 		return db.User{}, false, err
 	}
 
@@ -266,6 +266,31 @@ func (h *Handler) checkSignupAllowed(email string, isNewUser bool) error {
 	return nil
 }
 
+// checkSignupAllowedWithInvitation preserves existing account/allowlist rules and
+// additionally admits a new user who holds an unexpired email invitation.
+// Both code delivery and account creation must check this: an invitation can be
+// revoked or expire between sending and verifying the email code.
+func (h *Handler) checkSignupAllowedWithInvitation(ctx context.Context, email string, isNewUser bool) error {
+	signupErr := h.checkSignupAllowed(email, isNewUser)
+	if signupErr == nil {
+		return nil
+	}
+
+	// Leave InviteeUserID null: a new user can match only their verified email,
+	// never an unrelated account ID. The existing query requires a live workspace,
+	// an inviter, pending status, and expires_at > now().
+	invitations, err := h.Queries.ListPendingInvitationsForUser(ctx, db.ListPendingInvitationsForUserParams{
+		InviteeEmail: strings.ToLower(strings.TrimSpace(email)),
+	})
+	if err != nil {
+		return fmt.Errorf("check signup invitation: %w", err)
+	}
+	if len(invitations) > 0 {
+		return nil
+	}
+	return signupErr
+}
+
 func contains(slice []string, s string) bool {
 	for _, item := range slice {
 		if strings.EqualFold(item, s) {
@@ -302,12 +327,12 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 		}
 		// User does not exist → treat as new user
 		isNewUser := true
-		if err := h.checkSignupAllowed(email, isNewUser); err != nil {
+		if err := h.checkSignupAllowedWithInvitation(r.Context(), email, isNewUser); err != nil {
 			var signupErr SignupError
 			if errors.As(err, &signupErr) {
 				writeError(w, http.StatusForbidden, signupErr.Error())
 			} else {
-				writeError(w, http.StatusForbidden, "user registration is disabled")
+				writeError(w, http.StatusInternalServerError, "failed to check signup eligibility")
 			}
 			return
 		}
@@ -318,13 +343,13 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		isNewUser := false
-		if err := h.checkSignupAllowed(email, isNewUser); err != nil {
+		if err := h.checkSignupAllowedWithInvitation(r.Context(), email, isNewUser); err != nil {
 			// This should rarely happen, but handle it anyway
 			var signupErr SignupError
 			if errors.As(err, &signupErr) {
 				writeError(w, http.StatusForbidden, signupErr.Error())
 			} else {
-				writeError(w, http.StatusForbidden, "user registration is disabled")
+				writeError(w, http.StatusInternalServerError, "failed to check signup eligibility")
 			}
 			return
 		}

@@ -56,6 +56,17 @@ func (m *mockDB) Exec(ctx context.Context, sql string, args ...interface{}) (pgc
 	return pgconn.NewCommandTag("INSERT 1"), nil
 }
 
+// Existing gating tests model a database with no pending invitations.
+func (m *mockDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return &emptySignupInvitationRows{}, nil
+}
+
+type emptySignupInvitationRows struct{ pgx.Rows }
+
+func (*emptySignupInvitationRows) Next() bool { return false }
+func (*emptySignupInvitationRows) Close()     {}
+func (*emptySignupInvitationRows) Err() error { return nil }
+
 type mockRow struct {
 	pgx.Row
 	err error
