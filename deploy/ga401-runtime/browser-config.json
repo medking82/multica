@@ -1,0 +1,8 @@
+{
+  "browser": {
+    "launchOptions": {
+      "chromiumSandbox": true,
+      "headless": true
+    }
+  }
+}

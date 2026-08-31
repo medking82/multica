@@ -1,0 +1,39 @@
+name: multica-ga401-runtime
+services:
+  runtime:
+    image: multica-ga401-runtime:20260831-1
+    build:
+      context: .
+    hostname: GA401-Multica
+    user: "1000:1000"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./seccomp-profile.json
+    pids_limit: 512
+    cpus: 6
+    mem_limit: 8g
+    memswap_limit: 8g
+    shm_size: 1g
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g,mode=1777
+    restart: unless-stopped
+    stop_grace_period: 2m
+    volumes:
+      - runtime-home:/home/agent
+    environment:
+      MULTICA_DAEMON_DEVICE_NAME: GA401-Isolated
+      MULTICA_DAEMON_MAX_CONCURRENT_TASKS: "2"
+    labels:
+      io.hankee.owner: multica-ga401-runtime
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+volumes:
+  runtime-home:
+    labels:
+      io.hankee.owner: multica-ga401-runtime
