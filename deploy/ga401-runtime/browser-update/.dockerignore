@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!browser_*.py
+!browser_probe.cjs
+!profile_guard.py
+!seed_browser.py
+!launch-*.sh

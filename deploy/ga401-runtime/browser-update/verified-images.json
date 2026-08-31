@@ -1,0 +1,56 @@
+{
+  "login": {
+    "command": null,
+    "entrypoint": [
+      "python3",
+      "/opt/runtime/browser-update/browser_launcher.py",
+      "login"
+    ],
+    "env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "NODE_VERSION=22.23.2",
+      "YARN_VERSION=1.22.22",
+      "DEBIAN_FRONTEND=noninteractive",
+      "HOME=/home/browser",
+      "NODE_PATH=/opt/browser-tools/current/node_modules:/usr/local/lib/node_modules",
+      "PLAYWRIGHT_BROWSERS_PATH=0",
+      "DISABLE_AUTOUPDATER=1",
+      "MULTICA_DAEMON_AUTO_UPDATE=false",
+      "MULTICA_DAEMON_AUTO_RELOAD=false",
+      "MULTICA_CODEX_PATH=/usr/local/bin/codex",
+      "MULTICA_CLAUDE_PATH=/usr/local/bin/claude",
+      "MULTICA_ANTIGRAVITY_PATH=/usr/local/bin/agy",
+      "MULTICA_WORKSPACES_ROOT=/home/agent/workspaces",
+      "PYTHONUTF8=1",
+      "DISPLAY=:99",
+      "XAUTHORITY=/home/browser/.Xauthority",
+      "PLAYWRIGHT_SKIP_BROWSER_GC=1"
+    ],
+    "id": "sha256:dd47617dff0485623674e16ef417d5eb9ddcfeceea447303a6fcf5e3f3ad6a30"
+  },
+  "runtime": {
+    "command": null,
+    "entrypoint": [
+      "/opt/runtime/entrypoint.sh"
+    ],
+    "env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "NODE_VERSION=22.23.2",
+      "YARN_VERSION=1.22.22",
+      "DEBIAN_FRONTEND=noninteractive",
+      "HOME=/home/agent",
+      "NODE_PATH=/opt/browser-tools/current/node_modules:/usr/local/lib/node_modules",
+      "PLAYWRIGHT_BROWSERS_PATH=0",
+      "DISABLE_AUTOUPDATER=1",
+      "MULTICA_DAEMON_AUTO_UPDATE=false",
+      "MULTICA_DAEMON_AUTO_RELOAD=false",
+      "MULTICA_CODEX_PATH=/usr/local/bin/codex",
+      "MULTICA_CLAUDE_PATH=/usr/local/bin/claude",
+      "MULTICA_ANTIGRAVITY_PATH=/usr/local/bin/agy",
+      "MULTICA_WORKSPACES_ROOT=/home/agent/workspaces",
+      "PYTHONUTF8=1",
+      "PLAYWRIGHT_SKIP_BROWSER_GC=1"
+    ],
+    "id": "sha256:fbebe860e8ab842e3a5f98e20383752fb7a64e32f6877b01e8641e83b03fa13f"
+  }
+}

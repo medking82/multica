@@ -1,0 +1,109 @@
+name: multica-ga401-runtime
+services:
+  runtime:
+    image: multica-ga401-runtime:20260831-browser1
+    pull_policy: never
+    hostname: GA401-Multica
+    user: "1000:1000"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=../seccomp-profile.json
+    pids_limit: 512
+    cpus: 6
+    mem_limit: 8g
+    memswap_limit: 8g
+    shm_size: 1g
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g,mode=1777
+    restart: unless-stopped
+    stop_grace_period: 2m
+    volumes:
+      - runtime-home:/home/agent
+      - cli-tools:/opt/agent-tools:ro
+      - browser-tools:/opt/browser-tools:ro
+    environment:
+      MULTICA_DAEMON_DEVICE_NAME: GA401-Isolated
+      MULTICA_DAEMON_MAX_CONCURRENT_TASKS: "2"
+    labels: {io.hankee.owner: multica-ga401-runtime}
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  updater:
+    image: multica-ga401-runtime:20260831-browser1
+    pull_policy: never
+    user: "1001:1001"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=../seccomp-profile.json
+    entrypoint: [python3, /opt/runtime/browser-update/browser_watch.py]
+    command: [updater, watch]
+    pids_limit: 64
+    cpus: 1
+    mem_limit: 1g
+    memswap_limit: 1g
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+    restart: unless-stopped
+    volumes:
+      - cli-tools:/opt/agent-tools
+      - cli-validation:/opt/validation-results:ro
+      - browser-tools:/opt/browser-tools
+    networks: [cli-updates]
+    labels: {io.hankee.owner: multica-ga401-runtime}
+    logging:
+      driver: json-file
+      options: {max-size: 2m, max-file: "3"}
+  validator:
+    image: multica-ga401-runtime:20260831-browser1
+    pull_policy: never
+    user: "1002:1002"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=../seccomp-profile.json
+    entrypoint: [python3, /opt/runtime/browser-update/browser_watch.py]
+    command: [validator, watch]
+    network_mode: none
+    pids_limit: 512
+    cpus: 2
+    mem_limit: 2g
+    memswap_limit: 2g
+    shm_size: 512m
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g,mode=1777
+    restart: unless-stopped
+    volumes:
+      - cli-tools:/opt/agent-tools:ro
+      - cli-validation:/opt/validation-results
+      - browser-tools:/opt/browser-tools:ro
+    labels: {io.hankee.owner: multica-ga401-runtime}
+    logging:
+      driver: json-file
+      options: {max-size: 2m, max-file: "3"}
+volumes:
+  runtime-home:
+    external: true
+    name: multica-ga401-runtime_runtime-home
+  cli-tools:
+    external: true
+    name: multica-ga401-runtime_cli-tools
+  cli-validation:
+    external: true
+    name: multica-ga401-runtime_cli-validation
+  browser-tools:
+    labels: {io.hankee.owner: multica-ga401-runtime}
+networks:
+  default:
+    external: true
+    name: multica-ga401-runtime_default
+  cli-updates:
+    external: true
+    name: multica-ga401-runtime_cli-updates
