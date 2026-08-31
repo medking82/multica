@@ -5,6 +5,7 @@ test ! -e /var/run/docker.sock
 test ! -e /run/docker.sock
 test ! -e /home/marck
 test ! -e /home/agent/.multica/ga401-activated
+python3 /opt/runtime/verify-codex-bundle.py /opt/codex/0.151.0 --entrypoint /usr/local/bin/codex
 test "$(codex --version)" = 'codex-cli 0.151.0'
 claude --version | grep -F '2.1.251'
 agy --version | grep -F '1.1.22'

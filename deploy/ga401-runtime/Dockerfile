@@ -25,7 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        /home/agent/workspaces /home/agent/.multica /home/agent/.codex \
        /home/agent/.gemini /home/agent/.gemini/antigravity-cli
 
-COPY --chmod=0755 .assets/codex .assets/claude .assets/agy .assets/multica /usr/local/bin/
+COPY --chmod=0755 .assets/claude .assets/agy .assets/multica /usr/local/bin/
+COPY .assets/codex-bundle/ /opt/codex/0.151.0/
+COPY verify-codex-bundle.py codex-bundle.sha256 /opt/runtime/
+RUN ln -s /opt/codex/0.151.0/bin/codex /usr/local/bin/codex \
+    && python3 /opt/runtime/verify-codex-bundle.py /opt/codex/0.151.0 --entrypoint /usr/local/bin/codex
 COPY .assets/LICENSE .assets/NOTICE /usr/local/share/licenses/multica/
 COPY --chmod=0755 entrypoint.sh smoke.sh browser-mcp.sh configure-tools.sh /opt/runtime/
 COPY browser-smoke.cjs mcp-smoke.cjs browser-config.json /opt/runtime/

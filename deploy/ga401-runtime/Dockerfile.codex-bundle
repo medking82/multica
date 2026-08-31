@@ -1,0 +1,9 @@
+# Packaging-only repair of the reviewed local v1 image; build-codex-fix.sh pins its ID.
+FROM multica-ga401-runtime:20260831-1
+USER 0:0
+COPY .assets/codex-bundle/ /opt/codex/0.151.0/
+COPY verify-codex-bundle.py codex-bundle.sha256 /opt/runtime/
+COPY --chmod=0755 smoke.sh /opt/runtime/smoke.sh
+RUN ln -sfn /opt/codex/0.151.0/bin/codex /usr/local/bin/codex \
+    && python3 /opt/runtime/verify-codex-bundle.py /opt/codex/0.151.0 --entrypoint /usr/local/bin/codex
+USER 1000:1000

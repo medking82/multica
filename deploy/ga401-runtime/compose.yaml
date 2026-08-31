@@ -1,7 +1,7 @@
 name: multica-ga401-runtime
 services:
   runtime:
-    image: multica-ga401-runtime:20260831-1
+    image: multica-ga401-runtime:20260831-3
     build:
       context: .
     hostname: GA401-Multica

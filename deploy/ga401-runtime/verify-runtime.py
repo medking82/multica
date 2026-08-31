@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 PROJECT = "multica-ga401-runtime"
-IMAGE = PROJECT + ":20260831-1"
+IMAGE = PROJECT + ":20260831-3"
 VOLUME = PROJECT + "_runtime-home"
 NETWORK = PROJECT + "_default"
 

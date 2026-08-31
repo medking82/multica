@@ -2,7 +2,11 @@
 set -euo pipefail
 umask 077
 target=/home/marck/services/multica-runtime
-[[ "$(pwd -P)" == "$target" ]] || { echo "Run only inside $target" >&2; exit 1; }
+case "$(pwd -P)" in
+  "$target"|"$target/releases/codex-bundle-20260831-3") ;;
+  *) echo "Run only inside the approved runtime or Codex fix directory." >&2; exit 1 ;;
+esac
+[[ "$#" == 0 || ( "$#" == 1 && "${1:-}" == --codex-only ) ]] || exit 1
 [[ "$(id -u)" == 1000 ]] || { echo 'Run as marck, not root.' >&2; exit 1; }
 [[ "$(uname -m)" == x86_64 ]] || exit 1
 [[ ! -L .assets ]] || { echo 'Refusing symlinked asset directory.' >&2; exit 1; }
@@ -22,9 +26,28 @@ snapshot() {
   printf '%s\n' "$name: pinned executable snapshot verified"
 }
 
+# Snapshot the complete native distribution. The main binary locates its Code Mode
+# helper/resources relative to the package, not through the system PATH.
+for directory in .assets/codex-bundle .assets/codex-bundle/bin \
+                 .assets/codex-bundle/codex-path .assets/codex-bundle/codex-resources; do
+  [[ ! -L "$directory" ]] || { echo 'Refusing symlinked package directory.' >&2; exit 1; }
+  install -d -m 0755 "$directory"
+done
+bundle_source=/home/marck/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl
+# Git archives produced on Windows may give the checksum list CRLF endings.
+while IFS=$' \t\r' read -r expected relative; do
+  case "$relative" in
+    bin/codex|bin/codex-code-mode-host|codex-path/rg|codex-resources/bwrap|codex-package.json) ;;
+    *) echo 'Unexpected package member.' >&2; exit 1 ;;
+  esac
+  snapshot "$bundle_source/$relative" "codex-bundle/$relative" "$expected"
+done < codex-bundle.sha256
+chmod 0644 .assets/codex-bundle/codex-package.json
+python3 verify-codex-bundle.py .assets/codex-bundle
+[[ "${1:-}" != --codex-only ]] || exit 0
+
 snapshot /home/marck/.local/bin/agy agy 2822292f90deea4556938a8728fe4ed02a1d66d1525cf75fa07a171e36a38c25
 snapshot /home/marck/.local/share/claude/versions/2.1.251 claude fd5f10ff0eb58daec04900466b143ea98aab50abf208a422bc008eaec13f61f7
-snapshot /home/marck/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex codex 9739cbc928b9c573be83256acd46668f5dd4f119d2d09e05246895ca2aaf0c9a
 
 archive=.assets/multica-cli-0.4.36-linux-amd64.tar.gz
 if [[ ! -e "$archive" ]]; then

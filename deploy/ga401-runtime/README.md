@@ -22,8 +22,9 @@ Installing a CLI or seeing an online runtime is not proof of authenticated execu
 - Preserve existing provider logins, production directories, Docker volumes, PC
   settings, and all existing Multica records. Never mount the host Docker socket,
   home, provider credentials, SSH directory, or production repository into the runtime.
-- The image snapshots only the three already installed executable binaries, with
-  SHA-256 checks; no authentication, history, profile, or settings files are copied.
+- The image snapshots only the installed Claude/Antigravity executables and the
+  complete pinned Codex distribution, with SHA-256 checks; no authentication,
+  history, profile, or user settings files are copied.
 - The container uses its own non-root home. Provider and GitHub authentication are
   completed inside this boundary. Do not put tokens in Compose, Git, logs, or review.
 - Root filesystem is read-only; capabilities are dropped; no privileged mode,
@@ -85,7 +86,7 @@ can stop only this Compose project, preserving its home volume and all existing 
 | Component | Version/source |
 | --- | --- |
 | Multica CLI | Official `v0.4.36`, Linux amd64 release and published SHA-256 |
-| Codex | GA401-installed `0.151.0` native executable, hashed snapshot |
+| Codex | GA401-installed `0.151.0` complete native package, five hashed files |
 | Claude Code | GA401-installed `2.1.251` native executable, hashed snapshot |
 | Antigravity | GA401-installed `1.1.22` native executable, hashed snapshot |
 | Node | Official Node 22 bookworm-slim image, pinned amd64 manifest digest |
@@ -98,6 +99,56 @@ the host CLIs does not silently update the image. Rebuild a reviewed image with 
 pins; do not let an official update overwrite the separate custom Windows Desktop.
 Repository-specific dependencies remain the repository's responsibility, including
 Playwright browser revisions different from this image's preinstalled version.
+
+## Codex package repair for an already activated v1 runtime
+
+The first execution smoke, POC-5, exposed a packaging omission: authentication and
+model inference succeeded, but the standalone main binary could not locate
+`codex-code-mode-host`. Codex 0.151.0 is a package, not just one executable. Keep its
+`bin/codex`, `bin/codex-code-mode-host`, `codex-path/rg`, `codex-resources/bwrap`, and
+`codex-package.json` together. The CLI symlink resolves to that complete package.
+`verify-codex-bundle.py` checks the allowlisted layout, manifest, executable modes,
+and all five hashes; it rejects missing companions, mixed versions and extra files.
+
+For the authorized packaging-only repair, use a separate source directory at
+`/home/marck/services/multica-runtime/releases/codex-bundle-20260831-3`. Do not use
+the parent directory's pending browser/session Compose changes. The child-image
+build retains the exact reviewed v1 image and all other installed software:
+
+```sh
+bash prepare-assets.sh --codex-only
+python3 -m unittest discover -p 'test_*.py' -v
+docker compose config --format json | python3 verify-runtime.py config
+bash build-codex-fix.sh
+```
+
+The build script checks the local v1 image ID before building, disables build
+network access, then verifies inherited layers and runtime configuration. This
+build changes no running service and has no credentialed volume mounted. The
+canonical `Dockerfile` also includes the complete package for future fresh builds;
+the repair uses `Dockerfile.codex-bundle`, not an apt/npm refresh.
+
+Run the candidate's executable/browser smoke using a disposable tmpfs home, never
+the live named volume. It must run as UID 1000 with the existing sandbox/seccomp
+and resource limits. After deterministic checks and the independent packaging
+review, verify that GA401 has no active task or provider process before replacement:
+
+```sh
+# Only from the approved repair directory, after the gates above.
+# This intentionally retains the existing project name and private home volume.
+docker compose up -d --no-deps --no-build --pull never runtime
+docker inspect multica-ga401-runtime-runtime-1 | python3 verify-runtime.py inspect
+```
+
+The existing home contains the activation marker, so the daemon resumes on
+container start. Verify the same daemon/runtime/agent bindings and native login
+status, then retry the projectless Codex smoke and inspect actual Linux command
+output and its ticket result. A completed Run that reports blocked tools is a fail.
+Keep the v1 image and original v1 Compose as manual rollback references; do not
+delete a volume, copy logins, change sandbox settings, or roll back automatically.
+
+This repair does not upgrade provider versions or enable automatic updates.
+Updating a CLI on the GA401 host does not update the immutable container snapshot.
 
 ## Operator commands
 
