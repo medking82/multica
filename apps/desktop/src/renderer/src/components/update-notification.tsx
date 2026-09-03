@@ -77,8 +77,17 @@ export function UpdateNotification() {
             <p role="status" className="text-caption text-muted-foreground mt-2">
               {state.reason === "runtime_running"
                 ? "Finish active runs, then open Runtimes, select this computer, choose Stop and retry. This check never stops agents."
-                : `Runtime status could not be verified (${state.diagnostic}). Check system PowerShell/CIM availability, then retry. No installer was started.`}
+                : "Runtime status could not be checked. Finish active runs, then open Runtimes, select this computer and choose Stop. Download the matching installer below, quit Multica, then run the installer."}
             </p>
+          )}
+          {state.status === "deferred" && state.reason === "probe_failed" && (
+            <button
+              type="button"
+              onClick={() => window.desktopAPI.openExternal("https://multica.ai/download")}
+              className="mt-2 text-caption font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Download installer
+            </button>
           )}
           {requestFailed && (
             <p role="alert" className="text-caption text-destructive mt-2">Could not request installation. Try again.</p>

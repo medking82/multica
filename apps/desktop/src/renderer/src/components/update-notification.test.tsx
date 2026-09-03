@@ -91,8 +91,25 @@ describe("UpdateNotification", () => {
     fireEvent.click(pending);
     expect(mocks.installUpdate).toHaveBeenCalledOnce();
     await act(async () => finish({ status: "deferred", version: "0.4.37", allowed: false, reason: "probe_failed", diagnostic: "timed_out" }));
-    expect(screen.getByRole("status")).toHaveTextContent("timed_out");
+    expect(screen.getByRole("status")).toHaveTextContent("Runtime status could not be checked");
     expect(screen.getByRole("button", { name: "Retry installation" })).not.toBeDisabled();
+  });
+
+  it("offers manual recovery when the runtime probe cannot run without starting an installer", async () => {
+    mocks.getInstallState.mockResolvedValue({
+      status: "deferred", version: "0.4.37", allowed: false,
+      reason: "probe_failed", diagnostic: "launch_failed",
+    });
+    render(<UpdateNotification />);
+    const download = await screen.findByRole("button", { name: "Download installer" });
+    expect(screen.getByRole("status")).toHaveTextContent("Finish active runs");
+    expect(screen.getByRole("status")).toHaveTextContent("Stop");
+    expect(screen.getByRole("status")).toHaveTextContent("quit Multica");
+    fireEvent.click(download);
+    expect(mocks.openExternal).toHaveBeenCalledWith("https://multica.ai/download");
+    expect(mocks.installUpdate).not.toHaveBeenCalled();
+    act(() => installStateChanged({ status: "ready", version: "0.4.38" }));
+    expect(screen.queryByRole("button", { name: "Download installer" })).not.toBeInTheDocument();
   });
 
   it("keeps a newer event when the initial state snapshot resolves late", async () => {

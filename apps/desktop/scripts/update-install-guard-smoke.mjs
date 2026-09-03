@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import ts from "typescript";
 
 assert.equal(process.platform, "win32", "this smoke requires Windows");
@@ -28,6 +29,12 @@ new Function("require", "module", "exports", compiled)(
   (id) => id === "./bundled-cli" ? { bundledCliPath: () => bundledPath } : require(id), module, module.exports,
 );
 const { checkWindowsUpdateInstall } = module.exports;
+const timings = [];
+async function measureProbe(label, expected) {
+  const start = performance.now();
+  assert.deepEqual(await checkWindowsUpdateInstall(), expected);
+  timings.push({ check: label, elapsedMs: Math.round(performance.now() - start) });
+}
 let child;
 let exited;
 try {
@@ -44,15 +51,17 @@ try {
       timer.unref();
     }),
   ]);
-  assert.deepEqual(await checkWindowsUpdateInstall(), { allowed: false, reason: "runtime_running" });
+  await measureProbe("running exact path", { allowed: false, reason: "runtime_running" });
   bundledPath = join(fixture, "nonmatching", "multica.exe");
-  assert.deepEqual(await checkWindowsUpdateInstall(), { allowed: true });
+  await measureProbe("nonmatching path", { allowed: true });
   child.stdin.end();
   const [code] = await exited;
   assert.equal(code, 0);
   bundledPath = cli;
-  assert.deepEqual(await checkWindowsUpdateInstall(), { allowed: true });
-  console.log(JSON.stringify({ passed: true, checks: ["running exact path blocks", "nonmatching path clears", "stopped fixture clears", "spaces/apostrophe/Unicode path"], installerRuns: 0, userDaemonsStopped: 0 }));
+  for (let sample = 1; sample <= 5; sample++) {
+    await measureProbe(`stopped fixture ${sample}`, { allowed: true });
+  }
+  console.log(JSON.stringify({ passed: true, platform: process.platform, arch: process.arch, timings, maxElapsedMs: Math.max(...timings.map((sample) => sample.elapsedMs)), checks: ["running exact path blocks", "nonmatching path clears", "stopped fixture clears", "spaces/apostrophe/Unicode path"], installerRuns: 0, userDaemonsStopped: 0 }));
 } finally {
   if (child && child.exitCode === null) { child.kill(); await exited; }
   // Only the directory minted above may be removed; never infer a user path.

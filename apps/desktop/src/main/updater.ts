@@ -116,7 +116,7 @@ function checkForUpdatesOnce(): Promise<unknown> {
 export function setupAutoUpdater(
   getMainWindow: () => BrowserWindow | null,
   checkInstall: () => Promise<UpdateInstallCheck> = checkWindowsUpdateInstall,
-  guardedWindowsInstall = process.platform === "win32" && process.arch === "x64",
+  guardedWindowsInstall = process.platform === "win32",
 ): void {
   let installState: UpdateInstallState = { status: "idle" };
   let installCheck: Promise<UpdateInstallState> | null = null;

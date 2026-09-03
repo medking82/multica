@@ -367,7 +367,7 @@ describe("setupAutoUpdater", () => {
   });
 
   it.each([
-    ["win32", "x64", true], ["win32", "arm64", false],
+    ["win32", "x64", true], ["win32", "arm64", true],
     ["darwin", "x64", false], ["darwin", "arm64", false], ["linux", "x64", false],
   ])("applies the default guard only on %s/%s", async (platform, arch, guarded) => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -379,6 +379,13 @@ describe("setupAutoUpdater", () => {
       await invokeIpc("updater:get-preferences");
       expect(ctx.appHandlers.has("before-quit")).toBe(guarded);
       expect(autoUpdater.autoInstallOnAppQuit).toBe(!guarded);
+      if (guarded) {
+        emitUpdater("update-downloaded", { version: "0.4.37" });
+        await expect(invokeIpc("updater:install")).resolves.toMatchObject({
+          status: "deferred", reason: "runtime_running",
+        });
+        expect(ctx.quitAndInstall).not.toHaveBeenCalled();
+      }
     } finally {
       Object.defineProperty(process, "platform", platformDescriptor);
       Object.defineProperty(process, "arch", archDescriptor);
