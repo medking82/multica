@@ -55,6 +55,8 @@ test("release separates read-only candidate execution from reviewed privileged p
   assert.equal(workflow.on.pull_request_target, undefined);
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.deepEqual(workflow.jobs.build.permissions, { contents: "read" });
+  assert.doesNotMatch(JSON.stringify({ env: workflow.env, build: workflow.jobs.build }), /secrets\./,
+    "Candidate execution must never receive a repository secret");
   const build = workflow.jobs.build.steps;
   assert.match(workflow.jobs.build.if, /github.repository == 'medking82\/multica'/);
   assert.equal(build[0].with.ref, "codex/desktop-custom");
@@ -70,6 +72,50 @@ test("release separates read-only candidate execution from reviewed privileged p
   assert.equal(publish.steps[0].with.ref, "${{ github.workflow_sha }}");
   assert.equal(publish.steps[0].with["fetch-depth"], 0, "Canonical ancestry must not use shallow grafts");
   assert.equal(publish.steps[0].with["persist-credentials"], false);
+  assert.equal(publish.env?.GH_TOKEN, undefined, "Keep the publication credential step-scoped");
+  assert.equal(publish.steps.at(-1).env.GH_TOKEN, "${{ secrets.UPSTREAM_SYNC_TOKEN }}",
+    "Canonical upstream merges can update workflow files and need Workflows write");
+  assert.doesNotMatch(JSON.stringify(publish.steps.slice(0, -1)), /secrets\.UPSTREAM_SYNC_TOKEN/,
+    "Only the reviewed publication controller may receive the scoped token");
   assert.ok(!publish.steps.some((step) => /pnpm|npm install|candidate\.bundle\//.test(step.run ?? "")));
   assert.match(publish.steps.at(-1).run, /release.mjs publish/);
+});
+
+test("publisher checks its credential before execution and preserves controller failures", async (t) => {
+  const workflow = parse(await readFile(new URL("../../.github/workflows/custom-desktop.yml", import.meta.url), "utf8"));
+  const step = workflow.jobs.publish.steps.at(-1);
+  assert.equal(workflow.jobs.publish["runs-on"], "ubuntu-latest");
+  assert.equal(step.shell ?? "bash", "bash");
+  // Execute the real run block with an inert shell function. This cannot invoke
+  // the controller, GitHub CLI, Git or a network request, and has no real token.
+  const script = `node() { printf '%s\\n' "$@"; return "$MULTICA_TEST_PUBLISH_EXIT"; }\n${step.run}`;
+  const bash = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash";
+  for (const [name, token, controllerExit] of [
+    ["missing token", "", 0],
+    ["configured token", "fixture-not-a-credential", 0],
+    ["controller failure", "fixture-not-a-credential", 42],
+  ]) {
+    await t.test(name, () => {
+      const result = spawnSync(bash, ["--noprofile", "--norc", "-e", "-c", script], {
+        env: {
+          PATH: process.env.PATH,
+          ...(process.platform === "win32" ? { SystemRoot: process.env.SystemRoot } : {}),
+          GH_TOKEN: token, PAYLOAD: "/tmp/verified payload", MULTICA_TEST_PUBLISH_EXIT: String(controllerExit),
+        },
+        encoding: "utf8", windowsHide: true, timeout: 10_000,
+      });
+      assert.ifError(result.error);
+      if (!token) {
+        assert.equal(result.status, 1, "A missing secret must stop before the controller runs");
+        assert.match(result.stdout + result.stderr, /UPSTREAM_SYNC_TOKEN.*Contents.*Workflows/);
+        assert.doesNotMatch(result.stdout, /scripts\/custom-desktop\/release\.mjs/);
+      } else {
+        assert.equal(result.status, controllerExit, result.stderr);
+        assert.deepEqual(result.stdout.trim().split(/\r?\n/), [
+          "scripts/custom-desktop/release.mjs", "publish", "/tmp/verified payload",
+        ]);
+        assert.doesNotMatch(result.stdout + result.stderr, /fixture-not-a-credential/);
+      }
+    });
+  }
 });

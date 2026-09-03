@@ -108,6 +108,12 @@ jobs:
           path: ${{ runner.temp }}/custom-desktop-payload
       - name: Validate branch and hashes, then publish the complete draft
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The canonical upstream merge may update GitHub workflow files.
+          GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
           PAYLOAD: ${{ runner.temp }}/custom-desktop-payload
-        run: node scripts/custom-desktop/release.mjs publish "$PAYLOAD"
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::Configure UPSTREAM_SYNC_TOKEN for medking82/multica with Contents and Workflows write permissions."
+            exit 1
+          fi
+          node scripts/custom-desktop/release.mjs publish "$PAYLOAD"

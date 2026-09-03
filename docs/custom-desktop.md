@@ -40,6 +40,12 @@ The three controller files on `main` enable scheduled runs:
 The Windows build job has only read access and no persisted checkout credential.
 The separate publication job runs the controller at the workflow's immutable SHA,
 without installing candidate dependencies or executing candidate payload code.
+Configure the repository Actions secret `UPSTREAM_SYNC_TOKEN` with a fine-grained
+PAT restricted to `medking82/multica`, with Contents and Workflows read and write.
+The upstream-sync workflow and the final trusted publication step use this token;
+the read-only build and the other publication steps do not receive it. The default
+`GITHUB_TOKEN` cannot push a canonical upstream merge that updates workflow files.
+Publication stops before invoking the controller if the secret is missing.
 Bootstrap reads the controller blobs from the exact SOP release commit, never
 from local working files. Publication fetches both canonical parent commits and
 recomputes the merge tree before a fast-forward push to `codex/desktop-custom`;
