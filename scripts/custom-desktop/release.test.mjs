@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { assertCandidateParents, readControllerAtCommit, verifyCandidateTree } from "./release.mjs";
+import { assertCandidateParents, command, readControllerAtCommit, verifyCandidateTree } from "./release.mjs";
 
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "multica-release-policy-"));
@@ -34,6 +34,26 @@ test("publisher accepts only the tested source or its exact two-parent upstream 
   for (const parents of [[], [base], [upstream, base], [base, upstream, merged], [base, merged]]) {
     assert.throws(() => assertCandidateParents(merged, base, upstream, parents));
   }
+});
+
+test("failed Git merges report conflict output without changing the checkout", (t) => {
+  const { cwd, git, write } = fixture(t);
+  write("skill.go", "base\n"); git("add", "."); git("commit", "-qm", "base");
+  const common = git("rev-parse", "HEAD");
+  git("checkout", "-qb", "upstream");
+  write("skill.go", "upstream\n"); git("commit", "-qam", "upstream");
+  const upstream = git("rev-parse", "HEAD");
+  git("checkout", "-qb", "custom", common);
+  write("skill.go", "custom\n"); git("commit", "-qam", "custom");
+  const custom = git("rev-parse", "HEAD");
+  assert.throws(() => command("git", ["merge-tree", "--write-tree", custom, upstream], { cwd }),
+    /CONFLICT \(content\): Merge conflict in skill\.go/);
+  assert.equal(git("rev-parse", "HEAD"), custom);
+  assert.equal(git("status", "--porcelain"), "");
+});
+
+test("a command with no diagnostic output still reports its exit code", () => {
+  assert.throws(() => command(process.execPath, ["-e", "process.exit(7)"]), /exit code 7/);
 });
 
 test("controller bootstrap reads the reviewed blob even when checkout bytes are dirty", (t) => {

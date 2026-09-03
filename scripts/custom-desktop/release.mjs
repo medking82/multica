@@ -13,14 +13,18 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-function command(executable, args, options = {}) {
+export function command(executable, args, options = {}) {
   const { trim = true, ...spawnOptions } = options;
   const result = spawnSync(executable, args, {
     cwd: root, encoding: "utf8", windowsHide: true, timeout: 600_000,
     maxBuffer: 16 * 1024 * 1024, ...spawnOptions,
   });
   if (result.error || result.status !== 0) {
-    throw new Error(`${executable} ${args[0]} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
+    // Git writes merge-conflict details to stdout. Empty stderr must not hide
+    // those details (or the exit code), and diagnostics stay bounded.
+    const diagnostic = result.error?.message || result.stderr?.trim()
+      || (executable === "git" && result.stdout?.trim()) || `exit code ${result.status}`;
+    throw new Error(`${executable} ${args[0]} failed: ${diagnostic.slice(-4096)}`);
   }
   return trim ? result.stdout?.trim() ?? "" : result.stdout ?? "";
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
+	"github.com/multica-ai/multica/server/pkg/skillbundle"
 )
 
 func TestSelectedSlashSkillIDs(t *testing.T) {
@@ -73,6 +75,53 @@ func TestMergeTaskSkillsDoesNotMutateConfiguredBackingArray(t *testing.T) {
 	}
 	if configured[:cap(configured)][2].ID != "" {
 		t.Fatal("mergeTaskSkills wrote selected data into configured backing array")
+	}
+}
+
+func TestApplyClaimTaskSkillsReusesLoadedPayload(t *testing.T) {
+	// With no selection, no database access is needed: the main claim loader
+	// has already loaded and validated these configured Skills and built-ins.
+	h := &Handler{TaskService: &service.TaskService{}}
+	configured := service.AgentSkillData{ID: "11111111-1111-4111-8111-111111111111", Name: "configured", Content: "loaded files"}
+	builtin := service.AgentSkillData{Name: "builtin", Source: skillbundle.SourceBuiltin, Content: "built-in content"}
+	_, refs := service.BuildAgentSkillBundles([]service.AgentSkillData{configured, builtin})
+	for _, slim := range []bool{false, true} {
+		name := "inline"
+		if slim {
+			name = "refs"
+		}
+		t.Run(name, func(t *testing.T) {
+			resp := AgentTaskResponse{
+				WorkspaceID: "22222222-2222-4222-8222-222222222222",
+				Agent:       &TaskAgentData{Skills: []service.AgentSkillData{configured, builtin}, SkillRefs: refs},
+			}
+			agentCount, builtinCount, failure := h.applyClaimTaskSkills(context.Background(), db.AgentTaskQueue{}, &resp, slim, 1)
+			if failure != nil {
+				t.Fatalf("unexpected skill failure: %+v", failure)
+			}
+			if slim {
+				if !reflect.DeepEqual(resp.Agent.SkillRefs, refs) || agentCount != 2 || builtinCount != 0 {
+					t.Fatalf("loaded refs changed: %+v (%d, %d)", resp.Agent.SkillRefs, agentCount, builtinCount)
+				}
+			} else if !reflect.DeepEqual(resp.Agent.Skills, []service.AgentSkillData{configured, builtin}) || agentCount != 1 || builtinCount != 1 {
+				t.Fatalf("loaded Skills changed: %+v (%d, %d)", resp.Agent.Skills, agentCount, builtinCount)
+			}
+		})
+	}
+}
+
+func TestSelectedTaskSkillBundlesForResolveDoesNotLoadUnrequestedGrants(t *testing.T) {
+	h := &Handler{TaskService: &service.TaskService{}}
+	const selectedID = "11111111-1111-4111-8111-111111111111"
+	task := db.AgentTaskQueue{Context: []byte(`{"selected_skill_ids":["` + selectedID + `"]}`)}
+	wanted := []service.AgentSkillBundleRef{
+		{ID: selectedID, Source: skillbundle.SourceBuiltin},
+		{ID: "33333333-3333-4333-8333-333333333333", Source: skillbundle.SourceWorkspace},
+	}
+	// A nil query owner makes any accidental workspace read fail immediately.
+	bundles, err := h.selectedTaskSkillBundlesForResolve(context.Background(), task, parseUUID("22222222-2222-4222-8222-222222222222"), wanted)
+	if err != nil || len(bundles) != 0 {
+		t.Fatalf("unrequested or wrong-source grant was loaded: %+v, %v", bundles, err)
 	}
 }
 
