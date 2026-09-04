@@ -17,17 +17,17 @@ python .sop/sop.py --repo . check --full
 python .sop/sop.py --repo . autotrigger --inspect
 ```
 
-The workflow is specifically for the authorized `medking82/multica` Windows
-custom Desktop branch, not a server deployment. Before the first release,
+This worktree's workflow ships the authorized GA401 server/runtime upgrade on
+`codex/ga401-upgrade-0439`. It does not publish a Desktop installer. Before release,
 the clean custom branch's base must already exist on the fork remote. Freeze
 the intended staged diff, complete deterministic checks and the required
 high-risk independent review, then use `release-runner --launch`.
 
-SOP owns preflight, quick/full, commit, push, CI, verify, and notify. Its CI
-stage bootstraps only the three declared controller paths onto fork `main`
-(missing files only; different existing content stops), dispatches the custom
-workflow, and waits using `actions-watch` bound to the release commit. A
-failure is persisted and requires explicit remediation/resume authority.
-There is no automatic rollback, force-push, or production mutation.
+SOP owns preflight, quick/full, commit, push, CI, verify, and notify. Its CI stage
+transfers the exact committed source archive to GA401, builds isolated candidate
+images, rehearses a database restore/migration, then performs the authorized
+cutover. Verification binds public health, database identities and retained
+volumes. A failure is persisted and requires explicit remediation/resume
+authority. There is no automatic rollback or force-push.
 
-See [custom Desktop operations](../docs/custom-desktop.md).
+See [GA401 upgrade operations](../deploy/ga401-upgrade/README.md).

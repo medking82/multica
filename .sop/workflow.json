@@ -3,16 +3,14 @@
     "mode": "manual",
     "rollback_boundary": "manual_exact_commit"
   },
-  "release": { "remote": "origin", "branch": "codex/desktop-custom" },
-  "readiness": [["node", "scripts/custom-desktop/check.mjs", "preflight"]],
-  "quick": [["node", "scripts/custom-desktop/check.mjs", "quick"]],
-  "full": [["node", "scripts/custom-desktop/check.mjs", "full"]],
+  "release": { "remote": "origin", "branch": "codex/ga401-upgrade-0439" },
+  "readiness": [["python", "deploy/ga401-upgrade/controller.py", "readiness"]],
+  "quick": [["python", "deploy/ga401-upgrade/controller.py", "quick"]],
+  "full": [["python", "deploy/ga401-upgrade/controller.py", "full"]],
   "ci": [
-    ["node", "scripts/custom-desktop/release.mjs", "bootstrap"],
-    ["node", "scripts/custom-desktop/release.mjs", "dispatch"],
-    ["node", "scripts/custom-desktop/release.mjs", "watch"]
+    ["python", "deploy/ga401-upgrade/controller.py", "deploy"]
   ],
-  "verify": [["node", "scripts/custom-desktop/release.mjs", "verify"]],
+  "verify": [["python", "deploy/ga401-upgrade/controller.py", "verify"]],
   "notify": [],
   "rollback": []
 }
