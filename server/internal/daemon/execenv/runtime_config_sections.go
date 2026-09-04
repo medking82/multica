@@ -443,11 +443,15 @@ func writeProjectContext(b *strings.Builder, ctx TaskContextForEnv) {
 // writeIssueMetadata emits the Issue Metadata discipline section
 // (compressed). The dispatcher gates by kind.hasIssueContext(); this
 // helper does not re-check.
-func writeIssueMetadata(b *strings.Builder) {
+func writeIssueMetadata(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("## Issue Metadata\n\n")
 	b.WriteString("`metadata` is a small per-issue KV bag — custom key-value state your workflow wants future runs on this issue to re-read. Most runs write nothing.\n\n")
 	b.WriteString("- **Read on entry.** Hints, not truth: latest comment / code wins on conflict. Empty `{}` is normal.\n")
-	b.WriteString("- **Write on exit.** Only what a future run will actually re-read — short values, never secrets or long content. Overwrite or `multica issue metadata delete` stale keys. Full write discipline: the `multica-working-on-issues` skill.\n\n")
+	b.WriteString("- **Write on exit.** Only what a future run will actually re-read — short values, never secrets or long content. Overwrite or `multica issue metadata delete` stale keys.")
+	if where, ok := issueContractsSkill(modelVisibleSkills(ctx.AgentSkills)); ok {
+		b.WriteString(" Full write discipline: " + where + ".")
+	}
+	b.WriteString("\n\n")
 }
 
 // writeInstructionPrecedence emits the "Agent Identity wins over the issue
@@ -709,14 +713,63 @@ func writeWorkflowIssue(b *strings.Builder, ctx TaskContextForEnv) {
 
 // writeSubIssueCreation emits the Sub-issue Creation section.
 //
-// MUL-5442 demotes the full todo/backlog/stage playbook to the
-// multica-working-on-issues built-in skill: the semantics are only needed at
-// the moment an agent is about to create sub-issues, and that moment is
-// exactly what triggers the skill. The brief keeps the one-line map so the
-// flags remain discoverable without the skill.
-func writeSubIssueCreation(b *strings.Builder) {
+// MUL-5442 demotes the full todo/backlog/stage playbook to the multica-platform
+// built-in skill: the semantics are only needed at the moment an agent is about
+// to create sub-issues, and that moment is exactly what triggers the skill. The
+// brief keeps the one-line map so the flags remain discoverable without it.
+func writeSubIssueCreation(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("## Sub-issue Creation\n\n")
-	b.WriteString("`--status todo` starts an agent-assigned child immediately; `--status backlog` parks it for later promotion; `--stage <N>` groups children into ordered stages. Before creating sub-issues, read the `multica-working-on-issues` skill — it covers serial chains, promotion, and stage wake semantics.\n\n")
+	b.WriteString("`--status todo` starts an agent-assigned child immediately; `--status backlog` parks it for later promotion; `--stage <N>` groups children into ordered stages.")
+	if where, ok := issueContractsSkill(modelVisibleSkills(ctx.AgentSkills)); ok {
+		b.WriteString(" Before creating sub-issues, read " + where + " — it covers serial chains, promotion, and stage wake semantics.")
+	}
+	b.WriteString("\n\n")
+}
+
+// platformSkillName is the built-in skill that holds Multica's platform
+// contracts. It mirrors service.PlatformSkillName, which the daemon must not
+// import; the brief's rendered-output tests pin the two together.
+const platformSkillName = "multica-platform"
+
+// legacyIssueSkillName is what that skill was called before the platform
+// merge (MUL-6986). A daemon can outlive the backend it talks to in either
+// direction — a backend deploy does not update installed apps, and an app
+// update does not wait for a deploy — so the brief resolves the name it points
+// at from the skills this task actually received instead of hardcoding one.
+const legacyIssueSkillName = "multica-working-on-issues"
+
+// issueContractsSkill returns how the brief should refer to the skill carrying
+// the issue contracts, and whether any such skill is installed at all.
+//
+// Naming a skill the agent does not have is worse than saying nothing: it sends
+// the agent hunting, and on a miss it may skip the contract entirely. So an
+// unrecognised skill set yields no pointer rather than a guess.
+func issueContractsSkill(skills []SkillContextForEnv) (string, bool) {
+	if slug, ok := builtinSlug(skills, platformSkillName); ok {
+		return "`references/issues.md` in the `" + slug + "` skill", true
+	}
+	if slug, ok := builtinSlug(skills, legacyIssueSkillName); ok {
+		return "the `" + slug + "` skill", true
+	}
+	return "", false
+}
+
+// builtinSlug finds a built-in by name.
+//
+// Stated assumption: `multica-` is the platform namespace, and no workspace
+// skill in the batch shares a built-in's name. If one ever did, it would be
+// listed first, take the bare slug, and this pointer would name it instead of
+// the platform skill. That is accepted rather than handled — it needs a user to
+// author a skill that sanitizes to exactly `multica-platform`, and the fix when
+// it happens is to reject the prefix at skill create/import, not to make every
+// pointer defensive.
+func builtinSlug(skills []SkillContextForEnv, name string) (string, bool) {
+	for _, skill := range skills {
+		if skill.Name == name {
+			return skill.Name, true
+		}
+	}
+	return "", false
 }
 
 // writeSkills emits the Skills section: an index of invocable skill names.
@@ -747,6 +800,17 @@ func writeSkills(b *strings.Builder, ctx TaskContextForEnv) {
 		fmt.Fprintf(b, "- **%s**\n", skill.Name)
 	}
 	b.WriteString("\n")
+	platformSlug, _ := builtinSlug(skills, platformSkillName)
+	// One recall hint for the platform skill, because it is the only listed
+	// skill whose trigger is "the platform itself" rather than a task the
+	// agent already knows it is doing. Its single description now covers eight
+	// domains that used to advertise one apiece, so an agent reaching for a
+	// Multica contract has one name to guess instead of eight — this line is
+	// what keeps that consolidation from costing recall, and it must therefore
+	// name the skill that actually holds those contracts.
+	if platformSlug != "" {
+		b.WriteString("For a Multica platform action this brief does not fully cover — issue and PR contracts, mentions, agents, squads, autopilots, projects, runtimes, skill import — load the `" + platformSlug + "` skill and open the reference(s) its routing table names for the domains your task touches.\n\n")
+	}
 }
 
 // writeMentions emits the @mention side-effects section (compressed).
@@ -925,7 +989,7 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 	writeProjectContext(&b, ctx)
 
 	if kind.hasIssueContext() {
-		writeIssueMetadata(&b)
+		writeIssueMetadata(&b, ctx)
 	}
 
 	if kind == kindIssue {
@@ -945,7 +1009,7 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 	}
 
 	if kind.hasIssueContext() && ctx.IssueID != "" {
-		writeSubIssueCreation(&b)
+		writeSubIssueCreation(&b, ctx)
 	}
 
 	// Every kind, quick-create included. Quick-create used to be skipped here
