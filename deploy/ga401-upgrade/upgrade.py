@@ -20,9 +20,13 @@ RUNTIME = Path('/home/marck/services/multica-runtime/releases/browser-update-202
 BASE = Path('/home/marck/services/multica/upgrades')
 NAMES = {'backend': 'multica-backend-1', 'frontend': 'multica-frontend-1',
          'postgres': 'multica-postgres-1', 'runtime': 'multica-ga401-runtime-runtime-1'}
-OLD = {'backend': 'sha256:da3c239ecb737b52db621e9707d9310b8c879b959bd8ca81fadb081c39825189',
-       'frontend': 'sha256:ec2f3ddf1bbaaca98431e8114bbecca2eff7804a9539069e6ee0230f4fe6f1ec',
-       'runtime': 'sha256:fbebe860e8ab842e3a5f98e20383752fb7a64e32f6877b01e8641e83b03fa13f'}
+# The previous cutover succeeded; only its public probe was rejected by BIC.
+# Resume binds the verified deployed images and schema, never the obsolete 440 DB.
+OLD_COMMIT = 'daad4487937f5cf493f8705c23659d5c48a3055d'
+OLD_LEDGER = '450_drop_comment_delegated_failure_pending_index'
+OLD = {'backend': 'sha256:205c33c5762f092c685688df88385f7693678bb062fe4af63dfef027133a364f',
+       'frontend': 'sha256:158f0ab72e63e2b883fe3c172b3d4915d7a296b6995084cf8161be5907bb7da3',
+       'runtime': 'sha256:9d5bc992520f52f021aa84a48ba1ec47fc10a76162ce4be4ef96564ee0846337'}
 VOLUMES = {'postgres': {'/var/lib/postgresql/data': 'multica_pgdata'},
            'backend': {'/app/data/uploads': 'multica_backend_uploads'},
            'runtime': {'/home/agent': 'multica-ga401-runtime_runtime-home',
@@ -66,8 +70,18 @@ def inspect(name, kind='container'):
     return json.loads(docker(kind, 'inspect', name))[0]
 
 
+def runtime_base_tag():
+    # Compose may record Config.Image as an ID after an immutable image override.
+    tags = inspect(OLD['runtime'], 'image').get('RepoTags') or []
+    tags = sorted(tag for tag in tags if tag.startswith('multica-ga401-runtime:'))
+    require(tags, 'runtime base has no retained local tag')
+    require(inspect(tags[0], 'image')['Id'] == OLD['runtime'], 'runtime base tag drift')
+    return tags[0]
+
+
 def http(url):
-    with urllib.request.urlopen(url, timeout=15) as response:
+    request = urllib.request.Request(url, headers={'User-Agent': 'MulticaGA401HealthCheck/1.0'})
+    with urllib.request.urlopen(request, timeout=15) as response:
         require(response.status == 200, 'HTTP health check failed')
         return response.read()
 
@@ -184,8 +198,8 @@ class Upgrade:
     def preflight(self):
         require(os.uname().nodename == 'Marck-ROG-Zephyrus-G14-GA401QM', 'wrong host')
         require(shutil.disk_usage(self.root).free > 40 * 1024**3, 'less than 40 GiB free')
-        require(ledger().startswith('440_'), 'expected original migration 440')
-        health('560f01203-invite-only')
+        require(ledger() == OLD_LEDGER, 'unexpected deployed migration ledger')
+        health(OLD_COMMIT)
         idle()
         self.state['config_hashes'] = config_hashes()
         self.state['containers'] = {}
@@ -217,8 +231,7 @@ class Upgrade:
         runtime_dir.mkdir(mode=0o700)
         # BuildKit interprets a bare image ID as a registry name. Resolve the
         # running image's local tag, bind its ID, then verify the resulting layers.
-        base_tag = inspect(NAMES['runtime'])['Config']['Image']
-        require(inspect(base_tag, 'image')['Id'] == OLD['runtime'], 'runtime base tag drift')
+        base_tag = runtime_base_tag()
         (runtime_dir / 'Dockerfile').write_text('FROM ' + base_tag + '\nCOPY --from=' + self.tags['backend'] +
                                                ' /app/multica /usr/local/bin/multica\n')
         with (self.root / 'runtime-build.log').open('xb') as log:
@@ -276,7 +289,7 @@ class Upgrade:
                    '-U', 'rehearsal', '-d', 'rehearsal', data=stream.read())
         db = {'container': container, 'user': 'rehearsal', 'database': 'rehearsal'}
         before = identities(**db)
-        require(ledger(**db).startswith('440_'), 'restored database has unexpected schema')
+        require(ledger(**db) == OLD_LEDGER, 'restored database has unexpected schema')
         docker('run', '--rm', '--network', network, '--read-only', '--entrypoint', '/app/migrate',
                '-e', 'DATABASE_URL=postgres://rehearsal@' + container + ':5432/rehearsal?sslmode=disable',
                self.tags['backend'], 'up')
@@ -295,7 +308,7 @@ class Upgrade:
     def activate(self):
         self.originals()
         idle()
-        require(ledger().startswith('440_'), 'production schema changed before cutover')
+        require(ledger() == OLD_LEDGER, 'production schema changed before cutover')
         for role, image in self.state['images'].items():
             require(inspect(self.tags[role], 'image')['Id'] == image, 'candidate tag moved')
         backup = self.root / 'backups'

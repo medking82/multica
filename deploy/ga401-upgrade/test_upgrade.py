@@ -20,6 +20,21 @@ class Tests(unittest.TestCase):
 
     def make(self): return upgrade.Upgrade(self.root, COMMIT)
 
+    def test_health_probe_declares_its_client_identity(self):
+        with patch.object(upgrade.urllib.request, 'urlopen') as opener:
+            opener.return_value.__enter__.return_value.status = 200
+            upgrade.http('https://agent.hankee.com/health')
+            self.assertEqual(opener.call_args.args[0].get_header('User-agent'), 'MulticaGA401HealthCheck/1.0')
+
+    def test_runtime_base_uses_retained_tag_even_after_compose_used_an_image_id(self):
+        tag = 'multica-ga401-runtime:0.4.39-ga401.fixture'
+        with patch.object(upgrade, 'inspect', side_effect=[{'RepoTags': [tag]}, {'Id': upgrade.OLD['runtime']}]) as inspected:
+            self.assertEqual(upgrade.runtime_base_tag(), tag)
+            self.assertEqual(inspected.call_args_list[0].args, (upgrade.OLD['runtime'], 'image'))
+        with patch.object(upgrade, 'inspect', side_effect=[{'RepoTags': [tag]}, {'Id': 'wrong-image'}]):
+            with self.assertRaisesRegex(upgrade.Failure, 'tag drift'):
+                upgrade.runtime_base_tag()
+
     def test_exact_root_and_commit_are_required(self):
         with self.assertRaisesRegex(upgrade.Failure, "exact source"):
             upgrade.Upgrade(self.root, "bad")
@@ -87,7 +102,7 @@ class Tests(unittest.TestCase):
             events.append(('dump', args))
             raise upgrade.Failure('final backup failed')
         with patch.object(u, 'originals'), patch.object(upgrade, 'idle'), \
-             patch.object(upgrade, 'ledger', return_value='440_fixture'), \
+             patch.object(upgrade, 'ledger', return_value=upgrade.OLD_LEDGER), \
              patch.object(upgrade, 'inspect', side_effect=lambda tag, kind: {'Id': u.state['images'][next(r for r,t in u.tags.items() if t == tag)]}), \
              patch.object(upgrade, 'compose_config', side_effect=compose_config), \
              patch.object(u, 'compose', side_effect=compose), \
