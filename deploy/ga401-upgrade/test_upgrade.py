@@ -14,6 +14,14 @@ class Tests(unittest.TestCase):
         (self.root / "source/server/migrations/450.up.sql").write_text("-- migration\n")
         self.old = upgrade.BASE
         upgrade.BASE = self.base
+        prior = self.base / ('b' * 40); prior.mkdir()
+        images = {k: 'sha256:' + '1' * 64 for k in ('backend', 'frontend', 'runtime')}
+        (prior / 'state.json').write_text(json.dumps({'commit': 'b' * 40, 'status': 'complete',
+            'completed': list(upgrade.PHASES), 'images': images, 'rehearsal': {'ledger': '450_fixture'}}))
+        policy = self.root / 'source/deploy/ga401-upgrade'; policy.mkdir(parents=True)
+        (policy / 'transition.json').write_text(json.dumps({'prior_commit': 'b' * 40,
+            'prior_ledger': '450_fixture', 'prior_images': images, 'target_version': '0.4.39',
+            'upstream_commit': 'c' * 40}))
 
     def tearDown(self):
         upgrade.BASE = self.old; self.tmp.cleanup()

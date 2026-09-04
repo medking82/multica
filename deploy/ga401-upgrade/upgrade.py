@@ -34,6 +34,9 @@ VOLUMES = {'postgres': {'/var/lib/postgresql/data': 'multica_pgdata'},
                        '/opt/browser-tools': 'multica-ga401-runtime_browser-tools'}}
 TABLES = ('user', 'workspace', 'member', 'agent', 'agent_runtime', 'issue', 'comment', 'project', 'skill')
 PHASES = ('preflight', 'build', 'rehearse', 'activate', 'verify')
+HEX40 = re.compile(r'^[0-9a-f]{40}$')
+TRANSITION_FIELDS = {'prior_commit', 'prior_ledger', 'prior_images', 'target_version', 'upstream_commit'}
+SEMVER = re.compile(r'^\d+\.\d+\.\d+$')
 
 
 class Failure(RuntimeError):
@@ -156,12 +159,47 @@ class Upgrade:
         require(re.fullmatch(r'[0-9a-f]{40}', commit), 'exact source commit required')
         require(root == BASE / commit and root.resolve() == root, 'unexpected release root')
         self.root, self.commit = root, commit
+        transition_file = root / 'source/deploy/ga401-upgrade/transition.json'
+        require(transition_file.is_file(), 'missing transition receipt')
+        transition = json.loads(transition_file.read_text(encoding='utf-8'))
+        require(isinstance(transition, dict) and set(transition) == TRANSITION_FIELDS, 'transition receipt fields mismatch')
+        require(isinstance(transition['prior_commit'], str) and isinstance(transition['upstream_commit'], str)
+                and HEX40.fullmatch(transition['prior_commit']) and HEX40.fullmatch(transition['upstream_commit']),
+                'transition commit binding invalid')
+        require(transition['prior_commit'] != commit and transition['upstream_commit'] != transition['prior_commit'],
+                'transition source/previous commit mismatch')
+        require(isinstance(transition['prior_ledger'], str) and transition['prior_ledger'], 'transition ledger binding invalid')
+        require(isinstance(transition['prior_images'], dict) and set(transition['prior_images']) == {'backend', 'frontend', 'runtime'}, 'transition image binding invalid')
+        require(all(isinstance(value, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', value) for value in transition['prior_images'].values()), 'transition image ids invalid')
+        require(isinstance(transition['target_version'], str) and SEMVER.fullmatch(transition['target_version']), 'transition target version invalid')
+        self.transition = transition
+        self.old_commit = transition['prior_commit']
+        self.old_ledger = transition['prior_ledger']
+        self.old_images = dict(transition['prior_images'])
+        # The transition is created in the new release directory, while the
+        # immutable completed receipt it refers to lives in the prior release.
+        prior_root = BASE / self.old_commit
+        require(prior_root.is_dir() and prior_root.resolve() == prior_root, 'prior release root missing')
+        prior_path = prior_root / 'state.json'
+        require(prior_path.is_file(), 'prior release receipt missing')
+        prior_state = json.loads(prior_path.read_text(encoding='utf-8'))
+        require(prior_state.get('status') == 'complete' and prior_state.get('completed') == list(PHASES), 'prior upgrade receipt is not complete')
+        require(prior_state.get('commit') == self.old_commit, 'prior release commit receipt mismatch')
+        require(prior_state.get('images') == self.old_images, 'prior image receipt mismatch')
+        require(prior_state.get('rehearsal', {}).get('ledger') == self.old_ledger, 'prior migration receipt mismatch')
+        global OLD, OLD_COMMIT, OLD_LEDGER
+        OLD = dict(self.old_images)
+        OLD_COMMIT = self.old_commit
+        OLD_LEDGER = self.old_ledger
         self.path = root / 'state.json'
-        self.state = json.loads(self.path.read_text()) if self.path.exists() else {'completed': []}
-        require(self.state.get('commit', commit) == commit, 'state source mismatch')
+        self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'status': 'ready', 'completed': []}
+        require(self.state.get('commit', commit) == commit, 'new release commit receipt mismatch')
+        completed = self.state.get('completed', [])
+        require(isinstance(completed, list) and completed == list(PHASES[:len(completed)]),
+                'new release phase receipt invalid')
         self.state['commit'] = commit
         self.source = root / 'source'
-        self.version = '0.4.39-ga401.' + commit[:8]
+        self.version = transition['target_version'] + '-ga401.' + commit[:8]
         self.tags = {role: 'multica-ga401-' + role + ':' + self.version for role in OLD}
 
     def save(self):
@@ -169,6 +207,9 @@ class Upgrade:
         temporary.write_text(json.dumps(self.state, indent=2, sort_keys=True) + '\n')
         temporary.chmod(0o600)
         os.replace(temporary, self.path)
+
+    def snapshot(self):
+        return deployed_snapshot(self.commit, self.root)
 
     def phase(self, name):
         require(self.state.get('status') != 'FAILED_NEEDS_DECISION', 'previous failure requires operator decision')
@@ -385,6 +426,37 @@ class Upgrade:
         self.state['verified_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
 
+def deployed_snapshot(commit, root=None):
+    """Read a completed deployment receipt without constructing a transition.
+
+    This is deliberately read-only and binds the response to the live backend
+    commit and the completed receipt for that same commit.
+    """
+    require(isinstance(commit, str) and HEX40.fullmatch(commit), 'exact source commit required')
+    release_root = root or (BASE / commit)
+    require(release_root == BASE / commit and release_root.resolve() == release_root, 'unexpected release root')
+    path = release_root / 'state.json'
+    require(path.is_file(), 'deployment receipt missing')
+    state = json.loads(path.read_text(encoding='utf-8'))
+    require(state.get('status') == 'complete' and state.get('completed') == list(PHASES), 'latest receipt is incomplete')
+    require(state.get('commit') == commit, 'deployment receipt source mismatch')
+    images = state.get('images')
+    require(isinstance(images, dict) and set(images) == {'backend', 'frontend', 'runtime'}, 'deployment receipt images invalid')
+    require(all(isinstance(v, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', v) for v in images.values()), 'deployment receipt image ids invalid')
+    config = state.get('config_hashes', [])
+    require(isinstance(config, list) and all(isinstance(v, str) for v in config), 'deployment receipt config hashes invalid')
+    ledger_value = state.get('rehearsal', {}).get('ledger')
+    require(isinstance(ledger_value, str) and ledger_value, 'deployment receipt ledger missing')
+    health(commit)
+    require(ledger() == ledger_value, 'live migration ledger drift')
+    require(config_hashes() == config, 'live compose configuration drift')
+    for role, expected in images.items():
+        current = inspect(NAMES[role])
+        require(current['State']['Running'] and current['Image'] == expected, 'live deployment image drift')
+        require(container_contract(current) == state['containers'][role]['contract'], 'live container contract drift')
+    return {'source_commit': commit, 'images': dict(images), 'ledger': ledger_value, 'config_hashes': list(config)}
+
+
 def ledger_name(source):
     return sorted(p.name.removesuffix('.up.sql') for p in (source / 'server/migrations').glob('*.up.sql'))[-1]
 
@@ -392,14 +464,19 @@ def ledger_name(source):
 def main():
     import fcntl  # Remote-only; unit tests also run on Windows.
     parser = argparse.ArgumentParser()
-    parser.add_argument('phase', choices=PHASES)
-    parser.add_argument('--release-root', type=Path, required=True)
+    parser.add_argument('phase', choices=PHASES + ('snapshot',))
+    parser.add_argument('--release-root', type=Path)
     parser.add_argument('--source-commit', required=True)
     args = parser.parse_args()
     os.umask(0o077)
     with (BASE / '.upgrade.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        Upgrade(args.release_root, args.source_commit).phase(args.phase)
+        if args.phase == 'snapshot':
+            print(json.dumps(deployed_snapshot(args.source_commit, args.release_root), sort_keys=True))
+        else:
+            require(args.release_root is not None, '--release-root is required for upgrade phases')
+            upgrade = Upgrade(args.release_root, args.source_commit)
+            upgrade.phase(args.phase)
 
 
 if __name__ == '__main__':

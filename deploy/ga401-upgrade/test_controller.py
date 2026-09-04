@@ -42,13 +42,21 @@ class Tests(unittest.TestCase):
         calls=[]; envs=[]
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); (root/".git"/"sop").mkdir(parents=True)
+            (root/"scripts"/"custom-desktop").mkdir(parents=True)
+            (root/"scripts"/"custom-desktop"/"check.mjs").write_text("")
             def ex(argv, **kw):
                 calls.append(argv); envs.append(kw.get("env", {}))
                 if argv[0] == "git": return P(str(root/".git"))
                 return P("TestInviteOnlySignup PASS\n")
             controller.full(root, ex)
         self.assertTrue(calls)
-        self.assertTrue(str(calls[0][0]).endswith("go.exe"))
-        self.assertIn("127.0.0.1:13312", envs[0]["DATABASE_URL"])
+        go_calls=[(c,e) for c,e in zip(calls,envs) if str(c[0]).endswith("go.exe")]
+        self.assertTrue(go_calls)
+        self.assertIn("127.0.0.1:13312", go_calls[0][1]["DATABASE_URL"])
+
+    def test_missing_custom_gate_fails_closed(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(controller.Failure, "missing"):
+                controller.custom_gate(Path(d), "quick", lambda *a, **k: P())
 
 if __name__=="__main__": unittest.main()

@@ -1,64 +1,69 @@
-# GA401 Multica v0.4.39 upgrade boundary
+# GA401 Multica automatic updates
 
-This kit describes a bounded, operator-run upgrade of the existing `multica`
-Compose project. It preserves the invite-only backend behavior, Skill picker,
-native voice, browser/account registrations, provider logins, and all data.
+The user authorized scheduled upstream updates retaining slash skill selection,
+native voice, invite-only signup, accounts, provider configuration, browser
+registration and durable data. This permits one normal release per eligible
+stable upstream version, never failure resume, rollback, review bypass or credits.
 
-## Fixed target
+## Schedule and ownership
 
-- Host: `ga401` (`10.0.0.101`), public endpoint `https://agent.hankee.com`.
-- Source root: `/home/marck/services/multica/app`.
-- Compose project/file: `multica`, `docker-compose.selfhost.yml`.
-- Current images: `multica-backend-invite-only:560f01203`,
-  `multica-web:560f01203`; PostgreSQL is `pgvector/pgvector:pg17`.
-- Data volumes: `multica_pgdata`, `multica_backend_uploads`.
-- GA401 runtime volumes retained exactly: `multica-ga401-runtime_runtime-home`,
-  `multica-ga401-runtime_cli-tools`, and `multica-ga401-runtime_browser-tools`.
+`Multica-GA401-UpstreamUpdate` runs every six hours in Windows Task Scheduler,
+under the current signed-in user with limited privileges. Windows, SSH to
+`ga401`, Docker Desktop and declared build tools must be available. Missed runs
+start when Windows is available again. This is not a GA401 systemd timer and
+never wakes a Codex conversation.
 
-The candidate is built from source commit `f42a0a4678f3aa8ecba981f542d3ef3b66996249`
-with the reviewed invite-only patch applied. Candidate image tags are bound to
-the source hash and `0.4.39-ga401`; no floating tags are accepted.
+`install-scheduler.ps1` extracts exact committed files into a versioned directory
+under `%LOCALAPPDATA%\MulticaAutoUpdate`. Every invocation verifies their SHA-256
+hashes. The reserved checkout is `C:\github\multica-ga401-upgrade-0439`, branch
+`codex/ga401-upgrade-0439`. User edits, remote drift, an incomplete SOP run or a
+previous failed/interrupted cycle stop before further changes. Inspect task
+status and next run with `scheduler-status.ps1`; receipts and command logs live
+in the installation root's `state` directory. No email is sent by this kit.
 
-## Phases
+## Update cycle
 
-`upgrade.py` accepts `preflight`, `build`, `rehearse`, `activate`, and `verify`.
-Each invocation records phase and evidence in a private state file and stops on
-the first failure. It never retries, resumes silently, changes Caddy/router/DNS,
-or manages the existing GA401 CLI updater.
+`discover.py` reads the latest official published stable release, resolves tags
+to exact commits and detects tag movement. An unchanged release updates local
+status only: no model, dependency install, remote build or production restart.
 
-`preflight` records Compose/config/image identity, database schema version and
-counts, runtime volumes, disk space, and a zero-active admission snapshot.
-`build` requires the exact source archive and Dockerfile inputs and records image
-IDs. The runtime image derives from the exact old runtime image and copies only
-the candidate `/app/multica` binary to `/usr/local/bin/multica`. `rehearse` takes
-a logical `pg_dump`, restores it into a temporary PostgreSQL 17 container with
-no host port or production volume, and runs migrations 441–450 there.
-`activate` rechecks original config/image/volume contracts, stops only the
-backend/frontend and named runtime containers, captures the final consistent
-database dump after stopping, backs up relevant volumes, and starts candidates
-through separate image overrides while retaining the original env and PostgreSQL.
-The app checks complete before reopening the runtime. `verify` then checks
-`/health`, `/readyz`, migration completion, durable row identities, retained
-volumes, the running runtime CLI version and the public endpoint.
+For a new release, `cycle.py` binds the completed deployed receipt and makes a
+real two-parent Git merge. It never rsyncs over source. Conflicts, non-increasing
+versions, divergent upstream history or changes to instruction files, `.sop`,
+the deployment owner or custom feature checks require an operator.
 
-There is no `down -v`, prune, automatic rollback, or PostgreSQL recreation.
-After any phase failure the state is `FAILED_NEEDS_DECISION`; the operator
-must choose the retained exact images/Compose and same volumes for rollback.
+The candidate passes the existing custom Desktop quick/full gates (slash and
+voice contracts, regression tests and typechecks) and real invite-only tests
+against an isolated local PostgreSQL fixture. The canonical risk classifier
+admits this shared server release to one Native Review of the full staged diff.
+Future upstream releases are not implicitly trusted review baselines. Native
+quota-only fallback remains owned by Native Review. An oversized packet, failed
+review or unresolved finding pauses the cycle without retry or substitution.
 
-## Backup and runtime boundary
+The canonical SOP release runner owns commit, push, CI and verify. Review
+provides evidence; the user's recurring-update instruction provides release
+authority. Completion requires a successful SOP run and matching live receipt.
+There is deliberately no automatic resume or state-reset command.
 
-Activation creates private database and volume backups under the immutable release
-directory with restrictive permissions. Existing env files, PostgreSQL, runtime
-home, browser tools, provider logins, and registrations are retained. The
-existing guarded provider updater remains unchanged; it updates provider tools,
-not Multica. This one-shot controller does not enable recurring updates.
+## Deployment and data preservation
 
-The backend entrypoint runs `./migrate up` before serving and uses the migration
-advisory lock. Starting the candidate backend is the migration authority; do not
-run an independent migration command against production. Confirm `/health` and
-`/readyz` show candidate source, database, and migrations `ok` before any runtime
-reopen.
+`transition.json` binds prior source, exact image IDs and migration ledger to
+the target official version/commit. `upgrade.py` requires the referenced prior
+receipt to be complete. Read-only `snapshot` validates live source, images,
+ledger and Compose/container contracts without modifying deployment state.
 
-Future automatic source updates must merge upstream with conflict resolution and
-pause for required review; they must not rsync source trees. This one-shot
-controller does not implement recurring automation.
+Phases are preflight, build, rehearse, activate and verify. Images use the exact
+committed archive. Runtime inherits the previous filesystem/configuration and
+replaces only the Multica executable. A private dump is restored and migrated
+in isolated PostgreSQL 17 before cutover. Activation rechecks idle admission,
+stops writers and retains a final database dump plus uploads/runtime backups.
+
+Only backend, frontend and the named runtime are replaced through separate
+image overrides. PostgreSQL, original Compose/env and existing volumes remain.
+Verify checks health, readiness, public routing, runtime version, invite-only
+configuration, durable row IDs and volume contracts. The health client declares
+its identity instead of changing Cloudflare security policy.
+
+No volume deletion, prune, automatic rollback, router/DNS edit or provider
+updater change occurs. Slash/native voice checks preserve the current feature
+boundary; they do not constitute a physical microphone test.

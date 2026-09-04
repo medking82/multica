@@ -1,0 +1,11 @@
+{
+  "prior_commit": "11a18b4e87213bbb34a739bbfca514517ab74651",
+  "prior_ledger": "450_drop_comment_delegated_failure_pending_index",
+  "prior_images": {
+    "backend": "sha256:4f5062ba8c5398ca658723f2bdef46bf6aa6f58b0896e1862bdf004f92463a24",
+    "frontend": "sha256:14300493eaa859ab3893a4f5d97046d28f312a57c55797a5253499897f1f69b4",
+    "runtime": "sha256:4e925ee1c137291378c0ed3afe695b2140b50c17a6d53fc8020ae70520b6cece"
+  },
+  "target_version": "0.4.39",
+  "upstream_commit": "0eff894b59b6e8e28a886290d77cb41963c7449d"
+}
