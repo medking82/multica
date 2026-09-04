@@ -3,8 +3,23 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
+import { builderArgsForTarget, parsePackageArgs } from "../../apps/desktop/scripts/package.mjs";
 const require = createRequire(new URL("../../packages/core/package.json", import.meta.url));
 const { parse } = require("yaml");
+
+test("packaging preserves explicit versions and otherwise uses the Git default", () => {
+  const target = { platform: "win", arch: "x64" };
+  for (const override of [
+    ["-c.extraMetadata.version=0.4.39-custom.1"],
+    ["--config.extraMetadata.version=0.4.39-custom.1"],
+    ["-c.extraMetadata.version", "0.4.39-custom.1"],
+  ]) {
+    const args = builderArgsForTarget(target, parsePackageArgs(["--win", "--x64", ...override]), "0.4.39");
+    assert.deepEqual(args, ["--win", "--x64", ...override]);
+  }
+  assert.deepEqual(builderArgsForTarget(target, parsePackageArgs(["--win", "--x64"]), "0.4.39"),
+    ["-c.extraMetadata.version=0.4.39", "--win", "--x64"]);
+});
 
 test("Windows packaging preserves dotted override arguments through PowerShell", { skip: process.platform !== "win32" }, async () => {
   const workflow = parse(await readFile(new URL("../../.github/workflows/custom-desktop.yml", import.meta.url), "utf8"));
@@ -30,6 +45,11 @@ test("Windows packaging preserves dotted override arguments through PowerShell",
     "-c.win.signAndEditExecutable=false",
     "-c.publish.channel=latest",
   ]);
+  const builderArgs = builderArgsForTarget(
+    { platform: "win", arch: "x64" }, parsePackageArgs(JSON.parse(result.stdout)), "0.4.39-2-gabc123",
+  );
+  assert.deepEqual(builderArgs.filter((arg) => arg.startsWith("-c.extraMetadata.version=")),
+    [`-c.extraMetadata.version=${version}`], "The actual workflow must supply exactly one Electron version");
 });
 
 test("build payload is initialized at runner time before any consumer", async () => {

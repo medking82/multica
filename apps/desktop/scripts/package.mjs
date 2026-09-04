@@ -318,7 +318,10 @@ export function builderArgsForTarget(
   } = {},
 ) {
   const builderArgs = [];
-  if (version) builderArgs.push(`-c.extraMetadata.version=${version}`);
+  const hasExplicitVersion = parsed.sharedArgs.some((arg) =>
+    /^(?:-c|--config)\.extraMetadata\.version(?:=|$)/.test(arg),
+  );
+  if (version && !hasExplicitVersion) builderArgs.push(`-c.extraMetadata.version=${version}`);
   if (disableMacNotarize) builderArgs.push("-c.mac.notarize=false");
   builderArgs.push(PLATFORM_CONFIG[target.platform].builderFlag);
   const requestedTargets = parsed.platformTargets[target.platform];
@@ -413,7 +416,7 @@ function main() {
   // Step 2: derive the version that should be written into the app.
   const version = deriveVersion();
   if (version) {
-    console.log(`[package] Desktop version → ${version} (from git describe)`);
+    console.log(`[package] Git-derived default version → ${version} (explicit overrides take precedence)`);
   } else {
     console.warn(
       "[package] could not derive version from git; falling back to package.json",

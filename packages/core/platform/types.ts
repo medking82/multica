@@ -43,4 +43,6 @@ export interface CoreProviderProps {
   localeAdapter?: LocaleAdapter;
   /** Optional native dictation owner. Takes precedence over server transcription. */
   dictationAdapter?: DictationAdapter;
+  /** Automatically sync the signed-in user's locale. Pause during one-shot handoffs. Default: true. */
+  syncUserLocale?: boolean;
 }

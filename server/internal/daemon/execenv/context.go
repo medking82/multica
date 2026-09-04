@@ -368,6 +368,10 @@ func skillsDirPath(workDir, provider string) string {
 		// without those, OpenCode walks from the daemon's inherited PWD and
 		// misses .opencode/skills + AGENTS.md entirely (MUL-2416).
 		return filepath.Join(workDir, ".opencode", "skills")
+	case "codearts":
+		// CodeArts Agent discovers project skills from its provider-owned
+		// .codeartsdoer/skills directory.
+		return filepath.Join(workDir, ".codeartsdoer", "skills")
 	case "deveco":
 		// DevEco Code (Huawei's OpenCode fork) natively discovers project
 		// skills from .deveco/skills/ in the workdir, mirroring OpenCode's
@@ -1022,14 +1026,6 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("**Triggering comment ID:** `" + ctx.TriggerCommentID + "`\n\n")
 	} else {
 		b.WriteString("**Trigger:** New Assignment\n\n")
-	}
-
-	// Assignment handoff note (MUL-3375): the assigner's scoping instruction for
-	// this run. Distinct from a comment — there is no thread to reply to.
-	if ctx.HandoffNote != "" {
-		b.WriteString("## Handoff Note\n\n")
-		b.WriteString("The person who assigned this issue left this instruction for the run. Treat it as scope guidance and follow it before doing anything broader:\n\n")
-		fmt.Fprintf(&b, "> %s\n\n", ctx.HandoffNote)
 	}
 
 	b.WriteString("## Quick Start\n\n")
