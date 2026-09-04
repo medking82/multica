@@ -215,7 +215,11 @@ class Upgrade:
                        *arguments, str(self.source), output=log, merge_log=True)
         runtime_dir = self.root / 'runtime-build'
         runtime_dir.mkdir(mode=0o700)
-        (runtime_dir / 'Dockerfile').write_text('FROM ' + OLD['runtime'] + '\nCOPY --from=' + self.tags['backend'] +
+        # BuildKit interprets a bare image ID as a registry name. Resolve the
+        # running image's local tag, bind its ID, then verify the resulting layers.
+        base_tag = inspect(NAMES['runtime'])['Config']['Image']
+        require(inspect(base_tag, 'image')['Id'] == OLD['runtime'], 'runtime base tag drift')
+        (runtime_dir / 'Dockerfile').write_text('FROM ' + base_tag + '\nCOPY --from=' + self.tags['backend'] +
                                                ' /app/multica /usr/local/bin/multica\n')
         with (self.root / 'runtime-build.log').open('xb') as log:
             docker('build', '--pull=false', '-t', self.tags['runtime'], str(runtime_dir), output=log, merge_log=True)
@@ -224,8 +228,13 @@ class Upgrade:
             version = docker('run', '--rm', '--network', 'none', '--read-only', '--tmpfs', '/tmp',
                              '-e', 'HOME=/tmp/empty', '--entrypoint', binary, self.tags[role], '--version').decode()
             require(self.version in version and self.commit[:8] in version, 'candidate CLI identity mismatch')
-        require(inspect(OLD['runtime'], 'image')['Config'] == inspect(self.tags['runtime'], 'image')['Config'],
+        base_image = inspect(OLD['runtime'], 'image')
+        candidate_image = inspect(self.tags['runtime'], 'image')
+        require(base_image['Config'] == candidate_image['Config'],
                 'derived runtime changed provider or execution configuration')
+        base_layers = base_image['RootFS']['Layers']
+        require(candidate_image['RootFS']['Layers'][:-1] == base_layers,
+                'derived runtime did not preserve the exact base filesystem')
 
     def dump(self, filename):
         path = self.root / filename
