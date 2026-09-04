@@ -37,7 +37,18 @@ voice contracts, regression tests and typechecks) and real invite-only tests
 against an isolated local PostgreSQL fixture. The canonical risk classifier
 admits this shared server release to one Native Review of the full staged diff.
 Future upstream releases are not implicitly trusted review baselines. Native
-quota-only fallback remains owned by Native Review. An oversized packet, failed
+quota selection is prepared by Native Review's metadata-only `prepare-quota.py`
+immediately after checks. The full upstream-merge task admits Opus/high and native
+Gemini Flash/high; Sonnet remains available for separately admitted bounded reviews,
+not automatically for this full merge. Optional fresh Claude evidence lives in
+`state/claude-quota-input.json` using Native Review's selection schema with Opus
+only and account alias `local-main`. Missing evidence is unknown, never 100%.
+The helper otherwise reads the independent native Gemini Models pool, including
+five-hour and weekly windows/reset, and resolves its exact current Flash/high ID.
+All windows must exceed the configured reserve. Input snapshots use unique local
+filenames; the Native Review archive binds the selected route and input digest.
+No eligible candidate or a metadata failure pauses before inference. A selected
+review is one attempt without runtime fallback. An oversized packet, failed
 review or unresolved finding pauses the cycle without retry or substitution.
 
 The canonical SOP release runner owns commit, push, CI and verify. Review

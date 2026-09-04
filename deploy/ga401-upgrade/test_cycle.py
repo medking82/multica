@@ -82,4 +82,65 @@ class Tests(unittest.TestCase):
         for bad in ('v0.4.40-rc1', '', None, 'latest'):
             with self.assertRaises(cycle.Failure): cycle.version(bad)
 
+    def test_quota_selection_stdout_is_not_mistaken_for_the_review_result(self):
+        selection = {'kind': 'native-review-quota-selection', 'status': 'selected',
+                     'selected': {'route': 'antigravity-cli'}}
+        result = {'kind': 'claude-review-result', 'packet_sha256': 'a' * 64}
+        output = '\n'.join(map(json.dumps, [selection, result]))
+        self.assertEqual(cycle.quota_review_result(output), (selection, result))
+        for records in ([result], [selection], [result, selection], [selection, result, result],
+                        [{**selection, 'status': 'deferred'}, result]):
+            with self.assertRaises(cycle.Failure):
+                cycle.quota_review_result('\n'.join(map(json.dumps, records)))
+
+    def test_quota_preparation_failure_cannot_start_native_review_or_release(self):
+        with tempfile.TemporaryDirectory() as d:
+            owner = cycle.Cycle(cycle.REPO, Path(d))
+            calls = []
+            def command(args, **kwargs):
+                calls.append(args)
+                if 'risk-classification.py' in args[2]:
+                    return json.dumps({'risk': 'high', 'formal_review': 'required'})
+                raise cycle.Failure('quota metadata unavailable')
+            owner.command = command
+            with self.assertRaises(cycle.Failure): owner.review()
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(calls[1][2].endswith('prepare-quota.py'))
+            self.assertIn('--allow-gemini', calls[1])
+            self.assertNotIn('--allow-sonnet', calls[1])
+
+    def test_selected_review_binds_single_attempt_and_archived_quota(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); owner = cycle.Cycle(cycle.REPO, root)
+            owner.common = root / 'git'; owner.head = A; owner.tree = B
+            owner.git = lambda *args: B if args == ('write-tree',) else ''
+            packet = 'c' * 64
+            chosen = {'route': 'antigravity-cli', 'model': 'gemini-3.8-flash-high'}
+            selection = {'kind': 'native-review-quota-selection', 'status': 'selected',
+                         'selected': chosen, 'input_sha256': 'd' * 64}
+            folder = owner.common / 'sop/claude-reviews' / packet
+            folder.mkdir(parents=True)
+            report = {'kind': 'claude-review-evidence', 'status': 'completed', 'head': A,
+                      'scope': 'staged', 'findings': [], 'usage_credits_authorized': False,
+                      'attempts': [{'status': 'completed', 'reviewer': chosen['route'],
+                                    'selected_model': chosen['model']}]}
+            cycle.write_json(folder / 'report.json', report)
+            cycle.write_json(folder / 'quota-selection.json', selection)
+            calls = []
+            def command(args, **kwargs):
+                calls.append(args)
+                if args[2].endswith('risk-classification.py'):
+                    return json.dumps({'risk': 'high', 'formal_review': 'required'})
+                if args[2].endswith('prepare-quota.py'):
+                    return json.dumps({'status': 'selected', 'input': args[args.index('--output') + 1]})
+                return '\n'.join(map(json.dumps, [selection, {'kind': 'claude-review-result', 'packet_sha256': packet}]))
+            owner.command = command
+            owner.review()
+            self.assertEqual(owner.state['review_packet'], packet)
+            self.assertIn('--quota-input', calls[2])
+            self.assertNotIn('--review-mode', calls[2])
+            self.assertNotIn('--gemini-model', calls[2])
+            cycle.write_json(folder / 'quota-selection.json', {**selection, 'input_sha256': 'e' * 64})
+            with self.assertRaisesRegex(cycle.Failure, 'binding changed'): owner.review()
+
 if __name__ == '__main__': unittest.main()

@@ -16,6 +16,7 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 
 from discover import discover
 
@@ -55,6 +56,15 @@ def validate_review(report, head):
     require(report.get('findings') == [], 'review findings require operator adjudication')
     require(report.get('attempts') and report.get('usage_credits_authorized') is False,
             'native review evidence missing or unexpected credits')
+
+
+def quota_review_result(output):
+    records = [json.loads(line) for line in output.splitlines() if line.strip()]
+    require(len(records) == 2 and records[0].get('kind') == 'native-review-quota-selection'
+            and records[0].get('status') == 'selected' and records[0].get('selected')
+            and records[1].get('kind') == 'claude-review-result',
+            'expected quota selection followed by one native review result')
+    return records[0], records[1]
 
 @contextmanager
 def lock(path):
@@ -151,17 +161,34 @@ class Cycle:
         result = json.loads(self.command([sys.executable, '-B', str(SKILLS / 'risk-classification/scripts/risk-classification.py'), *facts]))
         write_json(self.root / 'risk.json', result)
         require(result.get('risk') == 'high' and result.get('formal_review') == 'required', 'unexpected review admission')
+        quota_input = self.root / ('review-quota-' + uuid.uuid4().hex + '.json')
+        preparation = [sys.executable, '-B', str(SKILLS / 'native-review/scripts/prepare-quota.py'),
+            '--task', 'Review a complete Multica upstream merge for GA401 compatibility, migrations and custom feature preservation',
+            '--allow-gemini', '--output', str(quota_input)]
+        claude_input = self.root / 'claude-quota-input.json'
+        if claude_input.exists() or claude_input.is_symlink():
+            preparation.extend(['--claude-input', str(claude_input)])
+        # A full upstream merge is not automatically admitted to a smaller reviewer.
+        prepared = json.loads(self.command(preparation, timeout=120))
+        require(prepared.get('status') == 'selected' and prepared.get('input') == str(quota_input),
+                'no fresh task-eligible quota; no reviewer was invoked')
         output = self.command([sys.executable, '-B', str(SKILLS / 'native-review/scripts/native-review.py'),
-            '--repo', str(self.repo), '--scope', 'staged', '--review-mode', 'auto', '--gemini-model', 'latest',
+            '--repo', str(self.repo), '--scope', 'staged', '--quota-input', str(quota_input),
             '--criteria', 'Preserve slash skill selection, native voice, invite-only access, accounts, provider configuration and durable data; detect upstream compatibility and migration failures before GA401 activation.',
             '--validation', 'Canonical custom Desktop quick/full gates, upgrade controller tests and real invite-only DB tests passed on the frozen staged tree.',
             '--accept-external-review'], timeout=7500)
-        emitted = json.loads(output)
+        selection, emitted = quota_review_result(output)
         packet = emitted.get('packet_sha256', '')
         require(re.fullmatch(r'[0-9a-f]{64}', packet), 'review packet identity missing')
         evidence = self.common / 'sop/claude-reviews' / packet / 'report.json'
         report = read_json(evidence)
         validate_review(report, self.head)
+        chosen = selection['selected']
+        require(len(report['attempts']) == 1 and report['attempts'][0].get('reviewer') == chosen['route']
+                and report['attempts'][0].get('selected_model') == chosen['model'],
+                'native reviewer differs from the quota selection')
+        require(read_json(evidence.with_name('quota-selection.json')).get('input_sha256') == selection['input_sha256'],
+                'archived quota input binding changed')
         require(self.git('write-tree') == self.tree and not self.git('diff', '--name-only'), 'source changed after review')
         self.state['review_packet'] = packet
 
