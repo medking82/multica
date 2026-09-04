@@ -1224,6 +1224,7 @@ func (h *Handler) recordHeartbeat(ctx context.Context, rt db.AgentRuntime) error
 		Status:          rt.Status,
 		LastSeenAt:      rt.LastSeenAt.Time,
 		LastSeenAtValid: rt.LastSeenAt.Valid,
+		WorkspaceID:     rt.WorkspaceID,
 	}, nil)
 }
 
@@ -1233,10 +1234,14 @@ func (h *Handler) recordHeartbeatLease(ctx context.Context, runtimeID string, le
 		return fmt.Errorf("invalid runtime_id: %w", err)
 	}
 	state := lease.Snapshot()
+	// Lenient parse: the workspace ID only feeds the recovery refresh payload.
+	// An invalid value suppresses the event instead of failing the heartbeat.
+	wsUUID, _ := util.ParseUUID(state.WorkspaceID)
 	return h.recordHeartbeatState(ctx, runtimeUUID, runtimeID, heartbeatLivenessState{
 		Status:          state.Status,
 		LastSeenAt:      state.LastSeenAt,
 		LastSeenAtValid: state.LastSeenAtValid,
+		WorkspaceID:     wsUUID,
 	}, lease.MarkDBWriteScheduled)
 }
 
@@ -1244,6 +1249,9 @@ type heartbeatLivenessState struct {
 	Status          string
 	LastSeenAt      time.Time
 	LastSeenAtValid bool
+	// WorkspaceID feeds the recovery lifecycle refresh; it is already known
+	// from the lease snapshot or the HTTP row and never re-read from the DB.
+	WorkspaceID pgtype.UUID
 }
 
 func (h *Handler) recordHeartbeatState(
@@ -1283,7 +1291,22 @@ func (h *Handler) recordHeartbeatState(
 	// dependent work that expects an online row. The steady-state online bump
 	// is ID-only and may be coalesced by the production scheduler.
 	if state.Status != "online" || !state.LastSeenAtValid {
-		if _, err := h.Queries.MarkAgentRuntimeOnline(ctx, runtimeUUID); err != nil {
+		// The conditional update reports whether this beat performed the
+		// offline → online flip. Only an actual flip publishes the lifecycle
+		// refresh; a beat that lost the race (or a never-seen row already
+		// online) stays silent and keeps the unconditional update below so
+		// last_seen_at is bumped and pgx.ErrNoRows is preserved for deletions.
+		flipped, err := h.Queries.MarkAgentRuntimeOnlineIfOffline(ctx, runtimeUUID)
+		if err != nil {
+			return err
+		}
+		if flipped > 0 {
+			// Reuse daemon:register so web and mobile invalidate both runtime and
+			// agent projections. Ordinary online heartbeats stay silent.
+			if state.WorkspaceID.Valid {
+				h.PublishRuntimeRefresh(uuidToString(state.WorkspaceID), "system", "", "heartbeat_recovery")
+			}
+		} else if _, err := h.Queries.MarkAgentRuntimeOnline(ctx, runtimeUUID); err != nil {
 			return err
 		}
 		if markDBWriteScheduled != nil {
@@ -1291,7 +1314,7 @@ func (h *Handler) recordHeartbeatState(
 		}
 		return nil
 	}
-	if err := h.HeartbeatScheduler.Schedule(ctx, runtimeUUID); err != nil {
+	if err := h.HeartbeatScheduler.Schedule(ctx, runtimeUUID, state.WorkspaceID); err != nil {
 		return err
 	}
 	if markDBWriteScheduled != nil {
@@ -2578,6 +2601,14 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 				// the triggering comment itself because that body is already
 				// injected into the prompt. Best-effort: any DB error or zero count
 				// leaves the hint suppressed.
+				//
+				// NewCommentsDeltaKnown is set on the success path REGARDLESS of
+				// the count, and is the only thing that distinguishes "the server
+				// looked and there is nothing" from "the server could not look".
+				// The count fields stay suppressed at zero — the daemon has no
+				// hint to render from a zero — but the daemon must still be able
+				// to tell a computed zero from a failed read, because only the
+				// computed one may waive the workflow's comment scan (MUL-6984).
 				if startedAt, err := h.Queries.GetLastTaskStartedAtForIssueAndAgent(r.Context(), db.GetLastTaskStartedAtForIssueAndAgentParams{
 					AgentID: task.AgentID,
 					IssueID: comment.IssueID,
@@ -2588,9 +2619,12 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 						WorkspaceID: comment.WorkspaceID,
 						Since:       startedAt,
 						AuthorID:    task.AgentID,
-					}); err == nil && cnt > 0 {
-						resp.NewCommentCount = int(cnt)
-						resp.NewCommentsSince = startedAt.Time.UTC().Format(time.RFC3339)
+					}); err == nil {
+						resp.NewCommentsDeltaKnown = true
+						if cnt > 0 {
+							resp.NewCommentCount = int(cnt)
+							resp.NewCommentsSince = startedAt.Time.UTC().Format(time.RFC3339)
+						}
 					}
 				}
 			}
