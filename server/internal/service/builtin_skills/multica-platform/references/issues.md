@@ -124,6 +124,22 @@ not observe a routable issue key in the PR title/body/branch — or the only mat
 was a bare body mention, which links as `reference_only` and is hidden from this
 list (see the reference-only rule above).
 
+## Listing and ordering issues
+
+`issue list` reads one page at a time, with a server maximum of 100 issues.
+Advance `--offset` by the number of issues actually returned. If the server
+cannot count matching issues, it returns `failed to count issues` as an error;
+do not treat that failure as an empty or complete list. Older servers can
+substitute the page length for a failed count, so that value alone is not proof
+that all matching issues have been read.
+
+`issue reorder` reads the issue's project-scoped status column before writing
+its new position. When a legacy total is unavailable or no larger than its
+page, it reads through an empty page. A failed request, malformed page, or
+duplicate issue stops the operation before any position write. This protects
+against truncated or repeated pages, but does not promise a snapshot across
+concurrent edits. There is no CLI bulk-export or `--all` mode.
+
 ## Custom properties: typed workflow state
 
 Workspaces may define custom issue properties (Severity, Environment, QA
@@ -265,14 +281,6 @@ multica issue runs <issue-id> --active --output json     # in-flight runs on thi
 multica issue runs <issue-id> --siblings --output json   # ...and across the sub-issue family
 ```
 
-Comment replies stay with the directly replied-to agent or the thread owner;
-they never schedule a delayed run for the issue assignee. Waiting for an offline
-or busy agent does not change the recipient. Explicitly @-mention another agent to
-involve it. New top-level comments without a target still route to the assignee.
-Issue and agent run history omit unused assignee fallbacks from older versions;
-cancelled fallbacks are hidden even if dispatched, provided execution never
-started. Ordinary cancellations and fallbacks that started remain visible.
-
 `--active` drops the execution history and returns only `queued` / `dispatched`
 / `running` / `waiting_local_directory` runs. `--siblings` widens the same read
 to the issue's family — its parent (or itself, when it has no parent) plus every
@@ -318,12 +326,12 @@ Creating every serial step as `todo` enqueues the whole chain at once.
 ### Stages: order sub-issues into barrier groups
 
 `--stage <N>` (N >= 1) groups sub-issues under the same parent into ordered
-stages. The parent assignee is woken **once, when a whole stage finishes** —
-i.e. every sub-issue in the lowest unfinished stage has reached a terminal
-status (`done`/`cancelled`). A completion that does not close a stage is silent
-(no comment, no wake). A sibling set with **no** stages is one implicit stage,
-so the parent is woken once when the *last* sub-issue finishes — not on every
-child.
+stages. The server **tries once to wake the parent assignee when a whole stage
+finishes** — i.e. every sub-issue in the lowest unfinished stage has reached a
+terminal status (`done`/`cancelled`); a notification that fails is not replayed.
+A completion that does not close a stage is silent (no comment, no wake). A
+sibling set with **no** stages is one implicit stage, so the parent is woken
+once when the *last* sub-issue finishes — not on every child.
 
 Advancement is agent-driven: the server only detects the closed barrier and
 wakes the parent assignee, who then decides whether to promote the next stage's
