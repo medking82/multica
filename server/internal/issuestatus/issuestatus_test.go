@@ -15,6 +15,41 @@ import (
 
 var testWorkspace = pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
 
+func TestCategoryWithError(t *testing.T) {
+	ctx := context.Background()
+	q := newFakeQuerier()
+	q.err = errors.New("catalog unavailable")
+	for _, status := range append(Canonical(), Triage) {
+		want, _ := CategoryForBehavior(status)
+		if got, err := CategoryWithError(ctx, q, testWorkspace, status); err != nil || got != want {
+			t.Errorf("built-in %s: category=%q err=%v; want %q", status, got, err, want)
+		}
+	}
+	if q.lookups != 0 {
+		t.Fatalf("built-in resolution read the catalog %d times", q.lookups)
+	}
+	if got, err := CategoryWithError(ctx, q, testWorkspace, "custom"); got != "" || !errors.Is(err, q.err) {
+		t.Fatalf("catalog error: category=%q err=%v; want the original read error", got, err)
+	}
+	q.err = nil
+	if got, err := CategoryWithError(ctx, q, testWorkspace, "missing"); got != "" || !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("missing status: category=%q err=%v; want no rows", got, err)
+	}
+	for _, category := range Categories() {
+		q.entries["custom"] = db.IssueStatus{Key: "custom", Category: category, Name: "Custom", ArchivedAt: pgtype.Timestamptz{Valid: true}}
+		if got, err := CategoryWithError(ctx, q, testWorkspace, "custom"); err != nil || got != category {
+			t.Errorf("archived custom %s: category=%q err=%v", category, got, err)
+		}
+	}
+	q.entries["custom"] = db.IssueStatus{Key: "custom", Category: "invalid", Name: "Custom"}
+	if got, err := CategoryWithError(ctx, q, testWorkspace, "custom"); got != "" || err == nil {
+		t.Fatalf("invalid category: category=%q err=%v; want an error", got, err)
+	}
+	if category, name := CategoryAndName(ctx, q, testWorkspace, "custom"); category != "" || name != "Custom" {
+		t.Fatalf("display lookup changed: category=%q name=%q", category, name)
+	}
+}
+
 // fakeQuerier is an in-memory catalog keyed by (workspace, key). It records
 // lookups so a test can assert that the built-in fast path issues NO query.
 type fakeQuerier struct {

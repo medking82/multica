@@ -2,17 +2,269 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/issuestatus"
+	dbfx "github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestPendingDelegatedFailureSweepDoesNotStarveOtherWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	var paused []pgtype.UUID
+	for _, status := range []string{issuestatus.Cancelled, issuestatus.Backlog} {
+		f, svc := seedDelegatedFailureFixture(t)
+		fx := dbfx.New(f.pool, f.workspaceID, f.userID)
+		if err := issuestatus.Ensure(ctx, svc.Queries, util.MustParseUUID(f.workspaceID)); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 50; i++ {
+			failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
+			target, created, err := svc.ensureDelegatedFailureRecoveryComment(ctx, failedID)
+			if err != nil || target == nil || !created {
+				t.Fatalf("seed interrupted recovery: created=%v err=%v", created, err)
+			}
+			paused = append(paused, target.comment.ID)
+		}
+		fx.Exec(t, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, status)
+	}
+	// The 101st signal is newer and belongs to a different, executable workspace.
+	f, svc := seedDelegatedFailureFixture(t)
+	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
+	target, created, err := svc.ensureDelegatedFailureRecoveryComment(ctx, failedID)
+	if err != nil || target == nil || !created {
+		t.Fatalf("seed executable recovery: created=%v err=%v", created, err)
+	}
+	result, err := svc.RecoverPendingDelegatedFailures(ctx, 100)
+	if err != nil || result != (DelegatedFailureRecoverySweepResult{Scanned: 1, Replayed: 1}) {
+		t.Fatalf("recovery behind 100 paused signals = %+v, %v; want one scan and replay", result, err)
+	}
+	if covered, err := svc.Queries.HasTaskCoveringDelegatedFailureComment(ctx, db.HasTaskCoveringDelegatedFailureCommentParams{
+		IssueID: target.issue.ID, AgentID: target.agent.ID, CommentID: target.comment.ID,
+	}); err != nil || !covered {
+		t.Fatalf("executable recovery has a task = %v, %v; want true", covered, err)
+	}
+	if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result != (DelegatedFailureRecoverySweepResult{}) {
+		t.Fatalf("repeat sweep = %+v, %v; want no duplicate dispatch", result, err)
+	}
+	for _, id := range paused {
+		if f.settled(t, id) {
+			t.Fatal("pausing an issue must not settle its undelivered recovery")
+		}
+	}
+}
+
+func TestDelegatedFailureRecoveryStatusEligibility(t *testing.T) {
+	for _, seeded := range []bool{true, false} {
+		name := "seeded_catalog"
+		if !seeded {
+			name = "missing_builtin_catalog"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f, svc := seedDelegatedFailureFixture(t)
+			fx := dbfx.New(f.pool, f.workspaceID, f.userID)
+			if seeded {
+				if err := issuestatus.Ensure(ctx, svc.Queries, util.MustParseUUID(f.workspaceID)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
+			target, created, err := svc.ensureDelegatedFailureRecoveryComment(ctx, failedID)
+			if err != nil || target == nil || !created {
+				t.Fatalf("seed recovery: created=%v err=%v", created, err)
+			}
+			cases := []struct {
+				status, category              string
+				allowed, archived, unresolved bool
+			}{
+				{status: "backlog"},
+				{status: "todo", allowed: true},
+				{status: "in_progress", allowed: true},
+				{status: "in_review", allowed: true},
+				{status: "blocked", allowed: true},
+				{status: "done"},
+				{status: "cancelled"},
+				{status: "triage"},
+				{status: "missing_recovery_status", unresolved: true},
+				{status: "custom_unstarted", category: "unstarted", allowed: true},
+				{status: "custom_started", category: "started", allowed: true},
+				{status: "custom_done", category: "done"},
+				{status: "custom_closed", category: "closed"},
+				{status: "archived_done", category: "done", archived: true},
+				{status: "archived_open", category: "started", allowed: true, archived: true},
+			}
+			for _, tc := range cases {
+				t.Run(tc.status, func(t *testing.T) {
+					if tc.category != "" {
+						cols := dbfx.Cols{"workspace_id": f.workspaceID, "key": tc.status, "name": tc.status,
+							"category": tc.category, "color": "#22c55e", "position": 1}
+						if tc.archived {
+							cols["archived_at"] = dbfx.Raw("now()")
+						}
+						fx.Insert(t, "issue_status", cols)
+					}
+					fx.Exec(t, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, tc.status)
+					pending, err := svc.Queries.ListPendingDelegatedFailureRecoveries(ctx, 100)
+					if err != nil {
+						t.Fatal(err)
+					}
+					included := false
+					for _, comment := range pending {
+						included = included || comment.ID == target.comment.ID
+					}
+					if included != tc.allowed {
+						t.Errorf("SQL selected recovery = %v, want %v", included, tc.allowed)
+					}
+					loaded, err := loadDelegatedFailureRecoveryTarget(ctx, svc.Queries, target.failed)
+					if err != nil || loaded == nil {
+						t.Fatalf("lifecycle must not prevent loading the signal target: %v", err)
+					}
+					allowed, err := canDispatchDelegatedFailureRecovery(ctx, svc.Queries, loaded.issue)
+					if (err != nil) != tc.unresolved {
+						t.Errorf("Go eligibility error = %v, want unresolved=%v", err, tc.unresolved)
+					}
+					if allowed != tc.allowed {
+						t.Errorf("Go allowed recovery = %v, want %v", allowed, tc.allowed)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDelegatedFailureRecoveryRechecksStatusAndResumes(t *testing.T) {
+	for _, status := range []string{"backlog", "cancelled", "done", "recovery_closed"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			f, svc := seedDelegatedFailureFixture(t)
+			fx := dbfx.New(f.pool, f.workspaceID, f.userID)
+			if status == "recovery_closed" {
+				fx.Insert(t, "issue_status", dbfx.Cols{"workspace_id": f.workspaceID, "key": status,
+					"name": "Closed", "category": "closed", "color": "#22c55e", "position": 1})
+			}
+			failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
+			target, created, err := svc.ensureDelegatedFailureRecoveryComment(ctx, failedID)
+			if err != nil || target == nil || !created {
+				t.Fatalf("seed recovery: created=%v err=%v", created, err)
+			}
+			pending, err := svc.Queries.ListPendingDelegatedFailureRecoveries(ctx, 100)
+			if err != nil || len(pending) != 1 || pending[0].ID != target.comment.ID {
+				t.Fatalf("initial candidates = %d, %v; want this recovery", len(pending), err)
+			}
+			// Change the issue after selection, before the same dispatch entry
+			// point used by the sweeper and completion reconciliation runs.
+			fx.Exec(t, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, status)
+			if err := svc.DispatchDelegatedFailureRecoveryComment(ctx, pending[0], pgtype.UUID{}); err != nil {
+				t.Fatal(err)
+			}
+			var count int
+			if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue
+				WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 || f.settled(t, target.comment.ID) {
+				t.Fatalf("paused recovery: tasks=%d; want no task or permanent receipt", count)
+			}
+			fx.Exec(t, `UPDATE issue SET status = 'todo' WHERE id = $1`, f.issueID)
+			if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result != (DelegatedFailureRecoverySweepResult{Scanned: 1, Replayed: 1}) {
+				t.Fatalf("reopened recovery = %+v, %v; want one replay", result, err)
+			}
+			if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result != (DelegatedFailureRecoverySweepResult{}) {
+				t.Fatalf("repeat sweep = %+v, %v; want no duplicate", result, err)
+			}
+		})
+	}
+}
+
+type recoveryCatalogErrorDB struct {
+	db.DBTX
+	err error
+}
+
+func (d recoveryCatalogErrorDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "FROM issue_status") {
+		return recoveryCatalogErrorRow{d.err}
+	}
+	return d.DBTX.QueryRow(ctx, sql, args...)
+}
+
+type recoveryCatalogErrorRow struct{ err error }
+
+func (r recoveryCatalogErrorRow) Scan(...any) error { return r.err }
+
+func TestDelegatedFailureRecoveryPreservesSignalWhenStatusUnavailable(t *testing.T) {
+	for _, readError := range []bool{false, true} {
+		name := "missing_catalog_entry"
+		if readError {
+			name = "catalog_read_error"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			f, svc := seedDelegatedFailureFixture(t)
+			fx := dbfx.New(f.pool, f.workspaceID, f.userID)
+			const status = "recovery_custom_status"
+			createStatus := func() {
+				fx.Insert(t, "issue_status", dbfx.Cols{"workspace_id": f.workspaceID, "key": status,
+					"name": "Active", "category": "started", "color": "#22c55e", "position": 1})
+			}
+			fx.Exec(t, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, status)
+			failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
+			queries := svc.Queries
+			failed, err := queries.GetAgentTask(ctx, failedID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantErr := error(pgx.ErrNoRows)
+			if readError {
+				createStatus()
+				wantErr = errors.New("catalog temporarily unavailable")
+				svc.Queries = db.New(recoveryCatalogErrorDB{DBTX: f.pool, err: wantErr})
+			}
+			// This post-terminal hook runs only once. A failure to read lifecycle
+			// must pause dispatch without losing the durable obligation to retry.
+			if handled, err := svc.recoverDelegatedTaskFailure(ctx, failed); !handled || !errors.Is(err, wantErr) {
+				t.Errorf("initial recovery: handled=%v err=%v; want handled and %v", handled, err, wantErr)
+			}
+			comment, err := queries.GetDelegatedFailureRecoveryComment(ctx, db.GetDelegatedFailureRecoveryCommentParams{
+				IssueID: util.MustParseUUID(f.issueID), WorkspaceID: util.MustParseUUID(f.workspaceID), SourceTaskID: failedID,
+			})
+			if err != nil {
+				t.Fatalf("recovery signal must survive status resolution failure: %v", err)
+			}
+			var count int
+			if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue
+				WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 0 || f.settled(t, comment.ID) {
+				t.Fatalf("unresolved recovery: tasks=%d; want no dispatch or permanent receipt", count)
+			}
+			if !readError {
+				if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result != (DelegatedFailureRecoverySweepResult{}) {
+					t.Fatalf("unresolved signal occupies the batch: %+v, %v", result, err)
+				}
+				createStatus()
+			}
+			svc.Queries = queries
+			if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result != (DelegatedFailureRecoverySweepResult{Scanned: 1, Replayed: 1}) {
+				t.Fatalf("catalog repaired: %+v, %v; want one replay without repeating the failure hook", result, err)
+			}
+			if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result != (DelegatedFailureRecoverySweepResult{}) {
+				t.Fatalf("repeat sweep: %+v, %v; want no duplicate", result, err)
+			}
+		})
+	}
+}
 
 type delegatedFailureFixture struct {
 	pool          *pgxpool.Pool

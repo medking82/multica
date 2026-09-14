@@ -473,19 +473,35 @@ func Category(ctx context.Context, q Querier, workspaceID pgtype.UUID, status st
 	return category
 }
 
+// CategoryWithError resolves lifecycle for side-effect decisions. Unlike
+// Category, it preserves catalog failures so a caller can defer work and retry.
+// Built-ins, including Triage, still resolve without reading the catalog.
+func CategoryWithError(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (string, error) {
+	category, _, err := categoryAndName(ctx, q, workspaceID, status)
+	return category, err
+}
+
 // CategoryAndName is the payload-oriented counterpart to EffectiveAndName.
 // It shares one catalog read while returning the public category rather than
 // the internal behavior projection.
 func CategoryAndName(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (string, string) {
+	category, name, _ := categoryAndName(ctx, q, workspaceID, status)
+	return category, name
+}
+
+func categoryAndName(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (string, string, error) {
 	if category, ok := CategoryForBehavior(status); ok {
-		return category, ""
+		return category, "", nil
 	}
 	entry, err := q.GetIssueStatusEntryByKey(ctx, db.GetIssueStatusEntryByKeyParams{WorkspaceID: workspaceID, Key: status})
 	if err != nil {
-		return "", ""
+		return "", "", fmt.Errorf("resolve issue status %q category: %w", status, err)
 	}
-	category, _ := ParseCategory(entry.Category)
-	return category, entry.Name
+	category, ok := ParseCategory(entry.Category)
+	if !ok {
+		return "", entry.Name, fmt.Errorf("invalid category %q for issue status %q", entry.Category, status)
+	}
+	return category, entry.Name, nil
 }
 
 // Resolve validates that status is usable in this workspace, returning the
