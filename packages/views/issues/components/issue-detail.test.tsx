@@ -1986,6 +1986,29 @@ describe("IssueDetail (shared)", () => {
       await waitFor(() => expect(document.getElementById(`comment-${target.id}`)).not.toBeNull());
       await waitFor(() => expect(document.getElementById(`comment-${target.id}`)).toHaveClass(highlightedCommentBackgroundClass));
     });
+    it("lands on the reply above a deleted one when a notification targets it", async () => {
+      // A deleted reply renders nothing (#8296 keeps its row only so its own
+      // replies keep a parent), so the id the notification carries has no
+      // anchor left. The landing rule's matrix lives in
+      // packages/core/issues/comment-deletion.test.ts.
+      const root = { ...mockTimeline[0]!, id: "thread-root", parent_id: null };
+      const previous = { ...mockTimeline[1]!, id: "reply-before", parent_id: root.id,
+        content: "Still here", created_at: "2026-01-18T00:00:00Z" };
+      const target = { ...mockTimeline[1]!, id: "deleted-reply", parent_id: root.id,
+        content: "", deleted_at: "2026-01-19T00:00:00Z", created_at: "2026-01-19T00:00:00Z" };
+      const kept = { ...mockTimeline[1]!, id: "reply-under-deleted", parent_id: target.id,
+        content: "Kept below it", created_at: "2026-01-20T00:00:00Z" };
+      mockApiObj.listTimeline.mockResolvedValue([root, previous, target, kept]);
+      mockApiObj.listTasksByIssue.mockResolvedValue([]);
+      renderIssueDetailWithHighlight(target.id);
+
+      await waitFor(() => expect(
+        hasHighlightedCommentBackground(document.getElementById(`comment-${previous.id}`)),
+      ).toBe(true));
+      // The tombstone itself never renders, so nothing waits on its anchor.
+      expect(document.getElementById(`comment-${target.id}`)).toBeNull();
+    });
+
     it("scrolls to the highlighted comment after both issue and timeline finish loading", async () => {
       renderIssueDetailWithHighlight("comment-2");
 
