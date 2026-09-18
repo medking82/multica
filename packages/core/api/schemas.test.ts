@@ -197,6 +197,24 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
     expect(parsed.issues[0]?.id).toBe(baseIssue.id);
     expect(parsed.issues[0]?.status_name).toBeUndefined();
   });
+  it("keeps detail-only original input without requiring it from older servers", () => {
+    const original = "调查 `command code` 的周限。\n不要改成 Claude Code。";
+    const parsed = ListIssuesResponseSchema.parse({
+      issues: [{ ...baseIssue, original_input: original }],
+      total: 1,
+    });
+    expect(parsed.issues[0]?.original_input).toBe(original);
+
+    const legacy = ListIssuesResponseSchema.parse({ issues: [baseIssue], total: 1 });
+    expect(legacy.issues[0]?.original_input).toBeUndefined();
+
+    const malformed = ListIssuesResponseSchema.parse({
+      issues: [{ ...baseIssue, original_input: { text: original } }],
+      total: 1,
+    });
+    expect(malformed.issues[0]?.id).toBe(baseIssue.id);
+    expect(malformed.issues[0]?.original_input).toBeUndefined();
+  });
   it("keeps the issue while independently dropping a malformed source context", () => {
     const parsed = ListIssuesResponseSchema.parse({
       issues: [{ ...baseIssue, source_context: { snapshot: "bad" } }],

@@ -22,9 +22,13 @@ func TestBuildQuickCreatePromptRules(t *testing.T) {
 	out := buildQuickCreatePrompt(Task{QuickCreatePrompt: "fix the login button color"})
 
 	mustContain := []string{
-		// high-fidelity invariant
-		"Faithfully restate what the user wants",
-		"Preserve specific names, identifiers, file paths",
+		// The raw prompt is server-owned; the model only writes the derived
+		// summary and must not normalize user terminology inside it.
+		"immutable `original_input`",
+		"Agent summary",
+		"never normalize an unfamiliar term to a likely alternative",
+		"Preserve every user-supplied product name, tool name, account name, command, identifier",
+		"keep the original term and state the uncertainty",
 		// strip non-spec material: verbal routing wrappers + conversational fillers
 		"verbal routing wrappers about creating the issue",
 		"pure conversational fillers",
@@ -37,6 +41,7 @@ func TestBuildQuickCreatePromptRules(t *testing.T) {
 		"never use it as an apology log",
 		// hard rules
 		"never invent requirements",
+		"never rename or normalize user-supplied terms",
 		"never reduce multi-sentence input",
 		// attachment boundary (MUL-5696): the ban is scoped to URLs, and file
 		// delivery defers to the quick-create ## Output section — a blanket
@@ -116,6 +121,15 @@ func TestIssuePromptsKeepSourceContextRuleOutOfPerTurnMessage(t *testing.T) {
 	comment := buildCommentPrompt(Task{IssueID: "issue-1", TriggerCommentID: "comment-1"}, "claude")
 	if strings.Contains(assignment, rule) || strings.Contains(comment, rule) {
 		t.Fatal("source-context precedence rule must live in the cache-stable runtime brief, not per-turn prompts")
+	}
+}
+
+func TestIssuePromptsKeepOriginalInputRuleOutOfPerTurnMessage(t *testing.T) {
+	const rule = "If the issue JSON contains `original_input`"
+	assignment := buildPromptBody(Task{IssueID: "issue-1"}, "claude")
+	comment := buildCommentPrompt(Task{IssueID: "issue-1", TriggerCommentID: "comment-1"}, "claude")
+	if strings.Contains(assignment, rule) || strings.Contains(comment, rule) {
+		t.Fatal("original-input precedence rule must live in the cache-stable runtime brief, not per-turn prompts")
 	}
 }
 
