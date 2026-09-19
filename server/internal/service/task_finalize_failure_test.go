@@ -46,7 +46,7 @@ func TestFinalizeTaskClaimFailureRollsBackTokenThenRequeue(t *testing.T) {
 		WorkspaceID: util.MustParseUUID(workspaceID),
 		UserID:      util.MustParseUUID(userID),
 		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
-	}, []pgtype.UUID{bogus}, true, []pgtype.UUID{selectedSkill})
+	}, []pgtype.UUID{bogus}, true, []pgtype.UUID{selectedSkill}, nil, []byte(`{"title":"claim snapshot"}`))
 	if ferr == nil {
 		t.Fatal("expected FinalizeTaskClaim to fail for an out-of-plan delivery receipt")
 	}
@@ -69,6 +69,13 @@ func TestFinalizeTaskClaimFailureRollsBackTokenThenRequeue(t *testing.T) {
 	if selectedGrantPersisted {
 		t.Fatal("selected Skill grant survived failed claim finalization")
 	}
+	var snapshotPersisted bool
+	if err := pool.QueryRow(ctx, `SELECT issue_snapshot IS NOT NULL FROM agent_task_queue WHERE id = $1`, taskID).Scan(&snapshotPersisted); err != nil {
+		t.Fatalf("read issue snapshot: %v", err)
+	}
+	if snapshotPersisted {
+		t.Fatal("issue snapshot survived failed claim finalization")
+	}
 
 	// The exact dispatched claim is released back to queued.
 	if _, err := svc.RequeueTaskAfterClaimFailure(ctx, task); err != nil {
@@ -80,6 +87,56 @@ func TestFinalizeTaskClaimFailureRollsBackTokenThenRequeue(t *testing.T) {
 	}
 	if status != "queued" {
 		t.Fatalf("task status = %s, want queued after requeue", status)
+	}
+}
+
+func TestFinalizeTaskClaimAuthorizesSkillGrantAndSnapshotTogether(t *testing.T) {
+	for _, rejected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("authorization rejected=%t", rejected), func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTaskClaimRacePool(t)
+			queries := db.New(pool)
+			svc := NewTaskService(queries, pool, nil, events.New())
+			taskID, userID, workspaceID := dispatchedCommentTaskFixture(t, ctx, pool)
+			task, err := queries.GetAgentTask(ctx, util.MustParseUUID(taskID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			selectedSkill := util.MustParseUUID("22222222-2222-2222-2222-222222222222")
+			authorized := false
+			authorize := func(_ *db.Queries, _ *db.CreateTaskTokenParams) error {
+				authorized = true
+				if rejected {
+					return &ClaimDeliveryAuthzError{Reason: "test_runtime_access_denied"}
+				}
+				return nil
+			}
+			_, err = svc.FinalizeTaskClaim(ctx, task, db.CreateTaskTokenParams{
+				TokenHash: fmt.Sprintf("finalize-combined-%d", time.Now().UnixNano()),
+				TaskID:    task.ID, AgentID: task.AgentID,
+				WorkspaceID: util.MustParseUUID(workspaceID), UserID: util.MustParseUUID(userID),
+				ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+			}, nil, false, []pgtype.UUID{selectedSkill}, authorize, []byte(`{"title":"claim snapshot"}`))
+			if !authorized || (err != nil) != rejected {
+				t.Fatalf("authorized=%t, finalize error=%v, rejected=%t", authorized, err, rejected)
+			}
+			var grant, snapshot bool
+			var tokens int
+			if err := pool.QueryRow(ctx, `SELECT
+				COALESCE(context->'selected_skill_ids' @> '["22222222-2222-2222-2222-222222222222"]'::jsonb, false),
+				COALESCE(issue_snapshot->>'title' = 'claim snapshot', false),
+				(SELECT count(*) FROM task_token WHERE task_id = $1)
+				FROM agent_task_queue WHERE id = $1`, taskID).Scan(&grant, &snapshot, &tokens); err != nil {
+				t.Fatal(err)
+			}
+			wantTokens := 1
+			if rejected {
+				wantTokens = 0
+			}
+			if grant != !rejected || snapshot != !rejected || tokens != wantTokens {
+				t.Fatalf("grant=%t snapshot=%t tokens=%d, rejected=%t", grant, snapshot, tokens, rejected)
+			}
+		})
 	}
 }
 
@@ -118,7 +175,7 @@ func TestFinalizeTaskClaimWithoutSelectedSkillsPreservesContext(t *testing.T) {
 				WorkspaceID: util.MustParseUUID(workspaceID),
 				UserID:      util.MustParseUUID(userID),
 				ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
-			}, nil, false, nil); err != nil {
+			}, nil, false, nil, nil, nil); err != nil {
 				t.Fatalf("FinalizeTaskClaim with no selected Skills: %v", err)
 			}
 
