@@ -133,10 +133,12 @@ type Config struct {
 	//   - LLMAPIKey       -> MULTICA_LLM_API_KEY
 	//   - LLMBaseURL       -> MULTICA_LLM_BASE_URL (OpenAI or any compatible gateway)
 	//   - LLMDefaultModel  -> MULTICA_LLM_DEFAULT_MODEL (used when a request omits `model`)
+	//   - LLMTranscriptionModel -> MULTICA_LLM_TRANSCRIPTION_MODEL (empty disables voice input)
 	//   - LLMMaxRetries    -> MULTICA_LLM_MAX_RETRIES (transport retry budget)
-	LLMAPIKey       string
-	LLMBaseURL      string
-	LLMDefaultModel string
+	LLMAPIKey             string
+	LLMBaseURL            string
+	LLMDefaultModel       string
+	LLMTranscriptionModel string
 	// LLMMaxRetries is the parsed MULTICA_LLM_MAX_RETRIES budget. nil means
 	// unset (llm.DefaultMaxRetries applies); llm.Retries(0) disables retries.
 	// The type carries the validation: it can only be built through llm.Retries,
@@ -415,10 +417,11 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	}
 
 	llmClient := llm.New(llm.Config{
-		APIKey:       cfg.LLMAPIKey,
-		BaseURL:      cfg.LLMBaseURL,
-		DefaultModel: cfg.LLMDefaultModel,
-		MaxRetries:   cfg.LLMMaxRetries,
+		APIKey:             cfg.LLMAPIKey,
+		BaseURL:            cfg.LLMBaseURL,
+		DefaultModel:       cfg.LLMDefaultModel,
+		TranscriptionModel: cfg.LLMTranscriptionModel,
+		MaxRetries:         cfg.LLMMaxRetries,
 	})
 	// Report the effective retry policy so an operator can confirm from the
 	// boot log alone what a misbehaving upstream will cost, instead of inferring
@@ -432,6 +435,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		"source", llmRetry.Source,
 		"request_timeout", llmRetry.RequestTimeout,
 		"enabled", llmClient.Enabled(),
+		"transcription_enabled", llmClient.TranscriptionEnabled(),
 	)
 
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)

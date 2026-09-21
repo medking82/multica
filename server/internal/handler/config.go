@@ -81,6 +81,10 @@ type AppConfig struct {
 	// must fail closed when this declaration is absent.
 	AgentConversationStartersSupported bool `json:"agent_conversation_starters_supported"`
 
+	// AudioTranscriptionEnabled is a capability bit only — never a model name,
+	// key, or provider URL. Clients fail closed when this field is absent.
+	AudioTranscriptionEnabled bool `json:"audio_transcription_enabled,omitempty"`
+
 	// ServerVersion is the running API build version, so self-hosted
 	// operators can confirm what's deployed and include it in bug reports.
 	// Only emitted on self-hosted deployments — omitted on the managed cloud,
@@ -103,6 +107,7 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		GoogleClientID:                     os.Getenv("GOOGLE_CLIENT_ID"),
 		WorkspaceCreationDisabled:          os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
 	}
+	config.AudioTranscriptionEnabled = h.LLM != nil && h.LLM.TranscriptionEnabled()
 	if h.Storage != nil {
 		config.CdnDomain = h.Storage.CdnDomain()
 	}

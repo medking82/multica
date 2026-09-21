@@ -753,7 +753,14 @@ export interface AppConfigResponse {
   /** Whether agent create/update persists `conversation_starters`. Older servers
    * silently ignored the unknown field, so absent must be treated as false. */
   agent_conversation_starters_supported?: boolean;
+  /** Whether the server has an explicitly configured audio transcription
+   * model. Older servers omit the field; false keeps microphone audio local. */
+  audio_transcription_enabled?: boolean;
   server_version?: string;
+}
+
+export interface AudioTranscriptionResponse {
+  text: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -950,6 +957,7 @@ export const AppConfigSchema = z.object({
   feature_flags: FeatureFlagsSchema,
   local_worktree_supported: BooleanWithDefaultSchema(false),
   agent_conversation_starters_supported: BooleanWithDefaultSchema(false),
+  audio_transcription_enabled: BooleanWithDefaultSchema(false),
   server_version: OptionalStringSchema,
 }).loose();
 
@@ -967,7 +975,18 @@ export const EMPTY_APP_CONFIG: AppConfigResponse = {
   local_worktree_supported: false,
   // Fail closed: old servers returned success while dropping the field.
   agent_conversation_starters_supported: false,
+  // Fail closed: never capture or upload microphone audio to an older server
+  // that has not declared the purpose-built transcription boundary.
+  audio_transcription_enabled: false,
   feature_flags: {},
+};
+
+export const AudioTranscriptionResponseSchema = z.object({
+  text: z.string(),
+}).loose();
+
+export const EMPTY_AUDIO_TRANSCRIPTION_RESPONSE: AudioTranscriptionResponse = {
+  text: "",
 };
 
 // Preference keys may grow over time, so keep both the key and value spaces

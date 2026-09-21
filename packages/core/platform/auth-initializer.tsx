@@ -94,6 +94,13 @@ export function AuthInitializer({
           .setAgentConversationStartersSupported(
             cfg.agent_conversation_starters_supported === true,
           );
+        // Microphone audio is sensitive and leaves the client only when a
+        // current server explicitly declares the fixed transcription route.
+        configStore
+          .getState()
+          .setAudioTranscriptionEnabled(
+            cfg.audio_transcription_enabled === true,
+          );
         if (cfg.posthog_key) {
           initAnalytics({
             key: cfg.posthog_key,

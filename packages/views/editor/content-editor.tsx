@@ -253,6 +253,13 @@ interface ContentEditorRef {
   getMarkdown: () => string;
   clearContent: () => void;
   focus: () => void;
+  /** Focus a live, visible editor synchronously, preserving its selection.
+   * Native dictation must not start while a lazy editor is still hidden. */
+  focusForNativeInput: () => boolean;
+  /** Insert literal text at the live selection and focus the editor. The
+   * object form is intentional: a transcription containing `<tag>` must stay
+   * text rather than entering Tiptap's HTML parsing path. */
+  insertPlainTextAtSelection: (text: string) => boolean;
   /**
    * Focus and place the caret at the document position under the given
    * viewport coordinates. Used by readonly-first hosts so the click that
@@ -907,6 +914,20 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         if (editor) editor.commands.focus();
         // Editor not mounted yet — defer the focus to `onCreate`.
         else focusOnReadyRef.current = true;
+      },
+      focusForNativeInput: () => {
+        if (!editor || editor.isDestroyed || !editor.isEditable) return false;
+        const { view } = editor;
+        if (!view.dom.isConnected || view.dom.getClientRects().length === 0) return false;
+        // ProseMirror focuses synchronously; Tiptap's focus command defers to
+        // an animation frame, which is too late for an OS-level paste target.
+        view.focus();
+        return view.hasFocus();
+      },
+      insertPlainTextAtSelection: (text: string) => {
+        if (!editor || editor.isDestroyed || !text) return false;
+        editor.commands.focus();
+        return editor.commands.insertContent({ type: "text", text });
       },
       focusAtCoords: (coords: { x: number; y: number }) => {
         if (!editor) {

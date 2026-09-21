@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -67,6 +68,88 @@ func TestConfiguredDefaultModel(t *testing.T) {
 	c := New(Config{APIKey: "k", DefaultModel: "my-model"})
 	if c.DefaultModel() != "my-model" {
 		t.Fatalf("expected configured default model, got %q", c.DefaultModel())
+	}
+}
+
+func TestTranscriptionRequiresExplicitModelOptIn(t *testing.T) {
+	configured := New(Config{APIKey: "k", TranscriptionModel: "gpt-4o-mini-transcribe"})
+	if !configured.TranscriptionEnabled() {
+		t.Fatal("expected transcription enabled with client credentials and an explicit model")
+	}
+
+	for _, cfg := range []Config{
+		{APIKey: "k"},
+		{TranscriptionModel: "gpt-4o-mini-transcribe"},
+	} {
+		c := New(cfg)
+		if c.TranscriptionEnabled() {
+			t.Fatalf("transcription unexpectedly enabled for %+v", cfg)
+		}
+		if _, err := c.Transcribe(context.Background(), AudioInput{
+			Reader:      bytes.NewReader([]byte("voice")),
+			Filename:    "recording.webm",
+			ContentType: "audio/webm",
+		}); err != ErrNotConfigured {
+			t.Fatalf("Transcribe error = %v, want ErrNotConfigured", err)
+		}
+	}
+}
+
+func TestTranscribeForwardsBoundedAudioMetadataAndReturnsTrimmedText(t *testing.T) {
+	var gotModel, gotFilename, gotContentType, gotAudio string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/audio/transcriptions" {
+			t.Fatalf("path = %q, want /audio/transcriptions", r.URL.Path)
+		}
+		reader, err := r.MultipartReader()
+		if err != nil {
+			t.Fatalf("MultipartReader: %v", err)
+		}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("NextPart: %v", err)
+			}
+			body, err := io.ReadAll(part)
+			if err != nil {
+				t.Fatalf("read part: %v", err)
+			}
+			switch part.FormName() {
+			case "model":
+				gotModel = string(body)
+			case "file":
+				gotFilename = part.FileName()
+				gotContentType = part.Header.Get("Content-Type")
+				gotAudio = string(body)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"text":"  Ship the review.  "}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{
+		APIKey:             "k",
+		BaseURL:            srv.URL,
+		TranscriptionModel: "gpt-4o-mini-transcribe",
+		MaxRetries:         retries(0),
+	})
+	text, err := c.Transcribe(context.Background(), AudioInput{
+		Reader:      bytes.NewReader([]byte("voice-bytes")),
+		Filename:    "recording.webm",
+		ContentType: "audio/webm",
+	})
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	if text != "Ship the review." {
+		t.Fatalf("text = %q", text)
+	}
+	if gotModel != "gpt-4o-mini-transcribe" || gotFilename != "recording.webm" || gotContentType != "audio/webm" || gotAudio != "voice-bytes" {
+		t.Fatalf("upstream multipart = model %q, filename %q, content-type %q, audio %q", gotModel, gotFilename, gotContentType, gotAudio)
 	}
 }
 

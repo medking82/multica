@@ -1,8 +1,8 @@
 // Package llm is a thin, reusable wrapper around the official OpenAI Go SDK
 // (github.com/openai/openai-go). It exists so the rest of the server has a
 // single, well-typed entry point for "just call an LLM" needs that do NOT
-// require the full agent runtime — currently chat auto-titling and chat
-// follow-up questions (MUL-4238).
+// require the full agent runtime — currently chat auto-titling, chat
+// follow-up questions, and explicitly requested microphone transcription.
 //
 // # Scope: the assist layer, not every model call in the product
 //
@@ -44,16 +44,19 @@
 //     Sends the tail of the conversation: up to 6 messages, the reply being
 //     answered capped at 3000 runes (2000 head + 1000 tail) and each older
 //     message at 800.
+//   - Voice input — server/internal/handler/transcription.go. Sends only the
+//     bounded microphone recording a member explicitly records and submits.
+//     Audio is held in memory for the request and is not persisted by Multica.
 //
-// Both consumers send private chat content, which is why an unconfigured
+// These consumers send private chat content or microphone audio, which is why an unconfigured
 // deployment making zero upstream requests is a contract rather than a side
 // effect: New with no API key and no base URL returns a disabled client whose
 // every call fails with ErrNotConfigured before an HTTP request is ever built,
-// and both consumers check Enabled() before doing any work
+// and every consumer checks Enabled() or TranscriptionEnabled() before doing any work
 // (TestUnconfiguredClientMakesZeroUpstreamRequests). An operator who must not
-// let THIS layer send chat content leaves MULTICA_LLM_API_KEY and
+// let THIS layer send private content leaves MULTICA_LLM_API_KEY and
 // MULTICA_LLM_BASE_URL empty; the product stays whole (client-derived chat
-// titles, no follow-up question buttons).
+// titles, no follow-up question buttons or microphone).
 //
 // The wrapper is intentionally small:
 //
@@ -75,6 +78,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -115,6 +119,10 @@ type Config struct {
 	// DefaultModel is used when a request omits the model. Maps to
 	// MULTICA_LLM_DEFAULT_MODEL. When empty, FallbackModel is used.
 	DefaultModel string
+	// TranscriptionModel enables the purpose-built voice-input path and fixes
+	// its model server-side. Empty disables transcription even when the chat
+	// assist layer is configured. Maps to MULTICA_LLM_TRANSCRIPTION_MODEL.
+	TranscriptionModel string
 	// MaxRetries is the transport-level retry budget applied to every request
 	// this client makes. Maps to MULTICA_LLM_MAX_RETRIES. Build one with
 	// Retries; nil means unset, and DefaultMaxRetries applies.
@@ -215,10 +223,11 @@ type RetryBudget struct {
 // Client is a configured, reusable LLM caller. It is safe for concurrent use;
 // the underlying SDK client holds no per-request state.
 type Client struct {
-	sdk          openai.Client
-	defaultModel string
-	enabled      bool
-	retry        RetryBudget
+	sdk                openai.Client
+	defaultModel       string
+	transcriptionModel string
+	enabled            bool
+	retry              RetryBudget
 }
 
 // New builds a Client from cfg. It never returns an error: an unconfigured
@@ -258,8 +267,9 @@ func New(cfg Config) *Client {
 	}
 
 	return &Client{
-		sdk:          openai.NewClient(opts...),
-		defaultModel: defaultModel,
+		sdk:                openai.NewClient(opts...),
+		defaultModel:       defaultModel,
+		transcriptionModel: strings.TrimSpace(cfg.TranscriptionModel),
 		// A deployment is "configured" if it gave us either a key or a base
 		// URL. A bare base URL (no key) is valid for keyless local gateways.
 		enabled: strings.TrimSpace(cfg.APIKey) != "" || strings.TrimSpace(cfg.BaseURL) != "",
@@ -279,6 +289,13 @@ func (c *Client) RetryBudget() RetryBudget {
 // Enabled reports whether the client was given any credentials or base URL.
 // Handlers use this to short-circuit with a 503 before doing any work.
 func (c *Client) Enabled() bool { return c != nil && c.enabled }
+
+// TranscriptionEnabled reports whether the deployment explicitly opted into
+// forwarding microphone audio. Credentials alone are not consent: an operator
+// must also set MULTICA_LLM_TRANSCRIPTION_MODEL.
+func (c *Client) TranscriptionEnabled() bool {
+	return c != nil && c.Enabled() && c.transcriptionModel != ""
+}
 
 // DefaultModel returns the effective default model (never empty).
 func (c *Client) DefaultModel() string { return c.defaultModel }
@@ -306,6 +323,62 @@ func (c *Client) Chat(ctx context.Context, params openai.ChatCompletionNewParams
 	defer cancel()
 
 	return c.sdk.Chat.Completions.New(ctx, params)
+}
+
+// AudioInput is the bounded recording and metadata the HTTP handler already
+// validated. Filename and ContentType are forwarded to the SDK multipart part
+// so OpenAI-compatible transcription endpoints can identify WebM/Opus input.
+type AudioInput struct {
+	Reader      io.Reader
+	Filename    string
+	ContentType string
+}
+
+type namedAudioReader struct {
+	io.Reader
+	filename    string
+	contentType string
+}
+
+func (r namedAudioReader) Filename() string    { return r.filename }
+func (r namedAudioReader) ContentType() string { return r.contentType }
+
+// Transcribe forwards one explicitly submitted recording to the configured
+// audio model and returns its plain text. Callers own file-size/type policy;
+// this package owns the single OpenAI SDK boundary and request timeout.
+func (c *Client) Transcribe(ctx context.Context, input AudioInput) (string, error) {
+	if !c.TranscriptionEnabled() {
+		return "", ErrNotConfigured
+	}
+	if input.Reader == nil {
+		return "", errors.New("llm: transcription input is required")
+	}
+	filename := strings.TrimSpace(input.Filename)
+	if filename == "" {
+		filename = "recording.webm"
+	}
+	contentType := strings.TrimSpace(input.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	ctx, cancel := withDefaultTimeout(ctx)
+	defer cancel()
+	response, err := c.sdk.Audio.Transcriptions.New(ctx, openai.AudioTranscriptionNewParams{
+		File: namedAudioReader{
+			Reader:      input.Reader,
+			filename:    filename,
+			contentType: contentType,
+		},
+		Model: openai.AudioModel(c.transcriptionModel),
+	})
+	if err != nil {
+		return "", err
+	}
+	if response == nil {
+		return "", errors.New("llm: upstream returned no transcription")
+	}
+	return strings.TrimSpace(response.Text), nil
 }
 
 // ChatStream performs a streaming chat completion, returning the SDK stream so

@@ -151,6 +151,9 @@ services:
       MULTICA_LLM_API_KEY: ${MULTICA_LLM_API_KEY:-}
       MULTICA_LLM_BASE_URL: ${MULTICA_LLM_BASE_URL:-}
       MULTICA_LLM_DEFAULT_MODEL: ${MULTICA_LLM_DEFAULT_MODEL:-}
+      # Explicit opt-in for microphone transcription. Empty keeps voice input
+      # hidden even when the other server-side LLM helpers are configured.
+      MULTICA_LLM_TRANSCRIPTION_MODEL: ${MULTICA_LLM_TRANSCRIPTION_MODEL:-}
       MULTICA_LLM_MAX_RETRIES: ${MULTICA_LLM_MAX_RETRIES:-}
       # Lark / Feishu bot integration. MULTICA_LARK_SECRET_KEY is the
       # opt-in: unset = integration disabled. Mainland 飞书 and international

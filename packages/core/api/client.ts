@@ -269,6 +269,7 @@ import {
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_APP_CONFIG,
+  EMPTY_AUDIO_TRANSCRIPTION_RESPONSE,
   EMPTY_ATTACHMENT,
   EMPTY_CHAT_MESSAGE_LIST,
   EMPTY_CHAT_PENDING_TASK,
@@ -293,6 +294,7 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  AudioTranscriptionResponseSchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
   IssueTableFacetsResponseSchema,
@@ -3179,6 +3181,29 @@ export class ApiClient {
     return parseWithFallback(raw, AttachmentResponseSchema, EMPTY_ATTACHMENT, {
       endpoint: "POST /api/upload-file",
     });
+  }
+
+  /** Send a user-triggered microphone recording to the deployment's
+   * purpose-built transcription endpoint. Audio is multipart so it never
+   * passes through the generic JSON request path or its Content-Type header. */
+  async transcribeAudio(file: File, signal?: AbortSignal): Promise<string> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await this.fetchRaw("/api/transcriptions", {
+      method: "POST",
+      body: formData,
+      signal,
+    });
+    const raw = (await res.json()) as unknown;
+    const parsed = parseWithFallback(
+      raw,
+      AudioTranscriptionResponseSchema,
+      EMPTY_AUDIO_TRANSCRIPTION_RESPONSE,
+      { endpoint: "POST /api/transcriptions" },
+    );
+    const text = parsed.text.trim();
+    if (!text) throw new Error("empty transcription response");
+    return text;
   }
 
   // Chat Sessions

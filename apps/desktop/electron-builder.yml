@@ -37,6 +37,8 @@ asarUnpack:
   - resources/**
 mac:
   entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    NSMicrophoneUsageDescription: Multica uses the microphone only when you start voice input, to turn your recording into text.
   target:
     - dmg
     - zip

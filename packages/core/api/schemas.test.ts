@@ -1164,6 +1164,26 @@ describe("AppConfigSchema agent_conversation_starters_supported drift", () => {
   });
 });
 
+describe("AppConfigSchema audio_transcription_enabled drift", () => {
+  it("defaults to false when the server predates voice input", () => {
+    expect(AppConfigSchema.parse({}).audio_transcription_enabled).toBe(false);
+  });
+
+  it("coerces a malformed declaration to false", () => {
+    expect(
+      AppConfigSchema.parse({ audio_transcription_enabled: "yes" })
+        .audio_transcription_enabled,
+    ).toBe(false);
+  });
+
+  it("carries a genuine declaration through", () => {
+    expect(
+      AppConfigSchema.parse({ audio_transcription_enabled: true })
+        .audio_transcription_enabled,
+    ).toBe(true);
+  });
+});
+
 describe("AppConfigSchema cdn_signed drift", () => {
   it("defaults cdn_signed to false when the server omits it (pre-MUL-3254 servers)", () => {
     const parsed = AppConfigSchema.parse({ cdn_domain: "cdn.example.com" });

@@ -8,6 +8,53 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("ApiClient audio transcription", () => {
+  it("posts the recording as multipart and returns transcript text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: "Ship the review." }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["voice-bytes"], "recording.webm", {
+      type: "audio/webm",
+    });
+
+    await expect(
+      new ApiClient("https://api.example.test").transcribeAudio(file),
+    ).resolves.toBe("Ship the review.");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/transcriptions",
+    );
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.body as FormData).get("file")).toBe(file);
+    expect(new Headers(init.headers).has("Content-Type")).toBe(false);
+  });
+
+  it("rejects an empty or malformed transcription response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ text: "   " }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      new ApiClient("https://api.example.test").transcribeAudio(
+        new File(["voice"], "recording.webm", { type: "audio/webm" }),
+      ),
+    ).rejects.toThrow(/empty transcription/i);
+  });
+});
+
 describe("ApiClient agent conversation-starter compatibility", () => {
   const prompt = {
     label: "Review a PR",

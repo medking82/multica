@@ -39,9 +39,10 @@ func (c *countingHTTPClient) Do(req *http.Request) (*http.Response, error) {
 // layer — agent runs reach a model by their own path, which no variable here
 // governs. See the package doc.)
 //
-// Both consumers of this package send private chat content upstream — the
+// The consumers of this package send private content upstream — the
 // first message of a chat session (auto-titling) and the tail of a conversation
-// (follow-up questions). "Leave the LLM variables empty" is the documented
+// (follow-up questions), plus a microphone recording only when the user
+// explicitly submits it for transcription. "Leave the LLM variables empty" is the documented
 // answer for an operator whose policy forbids that (.env.example, the docs
 // environment-variables pages, and GitHub issue #7162), so the behaviour has to
 // be a tested guarantee rather than something that happens to be true today.
@@ -51,7 +52,7 @@ func (c *countingHTTPClient) Do(req *http.Request) (*http.Response, error) {
 func TestUnconfiguredClientMakesZeroUpstreamRequests(t *testing.T) {
 	// A deployment that set only the model — the shape most likely to be
 	// mistaken for "configured" — must be just as inert as an empty config.
-	for _, cfg := range []Config{{}, {DefaultModel: "gpt-5.6-luna"}} {
+	for _, cfg := range []Config{{}, {DefaultModel: "gpt-5.6-luna"}, {TranscriptionModel: "gpt-4o-mini-transcribe"}} {
 		transport := &countingHTTPClient{}
 		cfg.HTTPClient = transport
 		c := New(cfg)
@@ -82,6 +83,14 @@ func TestUnconfiguredClientMakesZeroUpstreamRequests(t *testing.T) {
 			}},
 			{"GenerateJSON", func() error {
 				_, err := c.GenerateJSON(ctx, "", "system JSON", "private chat content", 0.3, 2048)
+				return err
+			}},
+			{"Transcribe", func() error {
+				_, err := c.Transcribe(ctx, AudioInput{
+					Reader:      strings.NewReader("private microphone audio"),
+					Filename:    "recording.webm",
+					ContentType: "audio/webm",
+				})
 				return err
 			}},
 		}
@@ -124,6 +133,7 @@ const openAISDKImportPrefix = "github.com/openai/openai-go"
 // upstream. The value is the summary each one is documented with.
 var documentedConsumers = map[string]string{
 	"internal/handler/chat_title.go":                  "chat auto-titling: the first user message of a new chat session",
+	"internal/handler/transcription.go":               "voice input: the microphone recording explicitly submitted by the user",
 	"internal/service/chat_quick_actions_generate.go": "chat follow-up questions: the tail of the conversation",
 }
 
@@ -135,6 +145,7 @@ var clientCallSurface = map[string]bool{
 	"ChatStream":   true,
 	"GenerateText": true,
 	"GenerateJSON": true,
+	"Transcribe":   true,
 }
 
 // methodNameCollisions are call sites the scan below flags by name without
@@ -155,7 +166,7 @@ var methodNameCollisions = map[string]bool{}
 // enumerates what is sent, feature by feature, so an admin can decide whether
 // to turn it on. That list is a promise about the whole server, and a third
 // feature calling GenerateText would break it silently: nothing in the build
-// notices, the docs keep naming two consumers, and the deployment starts
+// notices, the docs keep naming fewer consumers, and the deployment starts
 // sending something no one disclosed.
 //
 // The import guard below cannot catch that case — a new consumer goes through

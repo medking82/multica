@@ -12,6 +12,7 @@ import {
   useAuthStore,
 } from "../auth";
 import type { StorageAdapter, User, Workspace } from "../types";
+import { configStore } from "../config";
 import { workspaceKeys } from "../workspace/queries";
 import { AuthInitializer } from "./auth-initializer";
 
@@ -109,6 +110,7 @@ function renderInitializer({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  configStore.getState().setAudioTranscriptionEnabled(false);
 });
 
 afterEach(() => {
@@ -116,6 +118,17 @@ afterEach(() => {
 });
 
 describe("AuthInitializer recovery", () => {
+  it("publishes the server's explicit audio transcription capability", async () => {
+    const api = makeApi({
+      getConfig: vi.fn().mockResolvedValue({ audio_transcription_enabled: true }),
+    });
+    renderInitializer({ api });
+
+    await waitFor(() => {
+      expect(configStore.getState().audioTranscriptionEnabled).toBe(true);
+    });
+  });
+
   it("keeps the token and recovers on the online event after a network failure", async () => {
     const storage = makeStorage({ multica_token: "token-1" });
     const getMe = vi

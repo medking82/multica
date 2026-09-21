@@ -96,6 +96,31 @@
   "file_card": {
     "uploading": "Uploading {{filename}}"
   },
+  "desktop": {
+    "dictation": {
+      "toggle": "Dictate with Codex",
+      "opening": "Opening Codex dictation…",
+      "sent": "Sent {{shortcut}} to Codex. Finish in its dictation overlay, keep this input selected, and review the text before sending.",
+      "not_configured": "In the Codex/ChatGPT desktop app, set Toggle dictation hotkey to Ctrl+Alt+Shift+D. Use a unique global shortcut, not the in-app Start dictation shortcut.",
+      "app_not_running": "Open the Codex/ChatGPT Windows desktop app and stay signed in, then try again. The Codex CLI alone cannot provide global dictation.",
+      "not_focused": "Keep this Multica window and input focused, then try again.",
+      "busy": "Release any held shortcut keys, wait a moment, and try again.",
+      "unavailable": "Couldn't open Codex dictation. Try Ctrl+Alt+Shift+D manually. No audio was sent to a Multica transcription API."
+    }
+  },
+  "voice_input": {
+    "start": "Dictate",
+    "stop": "Stop recording",
+    "requesting": "Requesting microphone…",
+    "recording": "Recording — click to stop",
+    "transcribing": "Transcribing…",
+    "unavailable": "Voice input isn't supported in this browser.",
+    "permission_denied": "Microphone access was denied. Allow it in your system or browser settings.",
+    "failed": "Couldn't transcribe the recording.",
+    "empty": "No speech was detected.",
+    "insert_failed": "The editor isn't ready yet. Try again.",
+    "recording_limit": "Recording stopped after 2 minutes."
+  },
   "upload": {
     "failed": "Couldn't upload {{filename}}: {{reason}}",
     "in_progress": "Uploading…",

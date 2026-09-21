@@ -89,6 +89,31 @@
   "file_card": {
     "uploading": "{{filename}} 업로드 중"
   },
+  "desktop": {
+    "dictation": {
+      "toggle": "Codex로 음성 입력",
+      "opening": "Codex 음성 입력 여는 중…",
+      "sent": "Codex에 {{shortcut}}을 보냈습니다. 음성 입력 창에서 녹음을 마치고, 이 입력란을 선택한 상태로 텍스트를 확인한 뒤 전송하세요.",
+      "not_configured": "Codex/ChatGPT 데스크톱 앱에서 Toggle dictation hotkey를 Ctrl+Alt+Shift+D로 설정하세요. 앱 내부의 Start dictation이 아닌, 충돌 없는 전역 단축키를 사용해야 합니다.",
+      "app_not_running": "Windows용 Codex/ChatGPT 데스크톱 앱을 열어 로그인한 뒤 다시 시도하세요. Codex CLI만으로는 전역 음성 입력을 사용할 수 없습니다.",
+      "not_focused": "현재 Multica 창과 입력란을 선택한 상태에서 다시 시도하세요.",
+      "busy": "누르고 있는 단축키를 놓고 잠시 후 다시 시도하세요.",
+      "unavailable": "Codex 음성 입력을 열지 못했습니다. Ctrl+Alt+Shift+D를 직접 눌러 보세요. Multica 전사 API로 오디오를 보내지 않았습니다."
+    }
+  },
+  "voice_input": {
+    "start": "음성 입력",
+    "stop": "녹음 중지",
+    "requesting": "마이크 권한 요청 중…",
+    "recording": "녹음 중 — 클릭하여 중지",
+    "transcribing": "텍스트로 변환 중…",
+    "unavailable": "이 브라우저에서는 음성 입력을 지원하지 않습니다.",
+    "permission_denied": "마이크 접근이 거부되었습니다. 시스템 또는 브라우저 설정에서 허용해 주세요.",
+    "failed": "녹음을 텍스트로 변환하지 못했습니다.",
+    "empty": "음성이 감지되지 않았습니다.",
+    "insert_failed": "편집기가 아직 준비되지 않았습니다. 다시 시도해 주세요.",
+    "recording_limit": "2분 후 녹음이 자동으로 중지되었습니다."
+  },
   "upload": {
     "failed": "{{filename}}을(를) 업로드하지 못했어요: {{reason}}",
     "in_progress": "업로드 중…",

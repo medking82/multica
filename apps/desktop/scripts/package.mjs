@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Keep this hashbang LF-terminated; .gitattributes pins it for Vite's SSR loader.
 // Wrapper around `electron-builder` that keeps the Desktop version in
 // lockstep with the CLI. Both are derived from `git describe --tags
 // --match 'v[0-9]*' --always --dirty` — the same source GoReleaser reads

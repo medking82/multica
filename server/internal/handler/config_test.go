@@ -8,6 +8,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/testutil"
+	"github.com/multica-ai/multica/server/pkg/llm"
 )
 
 func TestGetConfigReportsCdnSignedMode(t *testing.T) {
@@ -103,6 +104,37 @@ func TestGetConfigIncludesRuntimeAuthConfig(t *testing.T) {
 	}
 	if cfg.DaemonAppURL != "https://app.example.com" {
 		t.Fatalf("daemon_app_url: want https://app.example.com, got %q", cfg.DaemonAppURL)
+	}
+}
+
+func TestGetConfigAdvertisesAudioTranscriptionOnlyAfterExplicitOptIn(t *testing.T) {
+	fetch := func(h *Handler) map[string]json.RawMessage {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+		w := httptest.NewRecorder()
+		h.GetConfig(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GetConfig: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var cfg map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &cfg); err != nil {
+			t.Fatalf("decode config: %v", err)
+		}
+		return cfg
+	}
+
+	credentialsOnly := &Handler{LLM: llm.New(llm.Config{APIKey: "test-key"})}
+	if _, present := fetch(credentialsOnly)["audio_transcription_enabled"]; present {
+		t.Fatal("audio_transcription_enabled must stay absent without an explicit transcription model")
+	}
+
+	enabled := &Handler{LLM: llm.New(llm.Config{
+		APIKey:             "test-key",
+		TranscriptionModel: "gpt-4o-mini-transcribe",
+	})}
+	raw, present := fetch(enabled)["audio_transcription_enabled"]
+	if !present || string(raw) != "true" {
+		t.Fatalf("audio_transcription_enabled: want true after explicit opt-in, got present=%v value=%s", present, raw)
 	}
 }
 
