@@ -2,7 +2,8 @@
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { cn } from "@multica/ui/lib/utils";
-import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useUploadGate, useComposerSubmit, VoiceInputButton } from "../../editor";
+import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useUploadGate, useComposerSubmit } from "../../editor";
+import { VoiceInputButton } from "../../editor/voice-input-button";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { contentReferencesAttachment } from "@multica/core/types";

@@ -78,8 +78,8 @@ import {
   FileDropOverlay,
   useUploadGate,
   useComposerSubmit,
-  VoiceInputButton,
 } from "../editor";
+import { VoiceInputButton } from "../editor/voice-input-button";
 import { useIssueCreateUploads } from "./use-issue-create-uploads";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { useT } from "../i18n";

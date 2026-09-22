@@ -81,6 +81,11 @@ for the native Windows and Electron smoke fixtures and remaining manual checks.
 
 ## Validation and limitations
 
+Fork-only composer controls import their own module directly. Upstream editor
+barrel mocks deliberately need no `VoiceInputButton` export; the normal composer
+suites exercise that boundary, while `comment-dictation.test.tsx` covers the real
+mic/editor binding. Keep new upstream tests unchanged when merging stable releases.
+
 `node scripts/custom-desktop/check.mjs full` runs the targeted shared/desktop
 regressions, typechecks, control-policy tests, and isolated helper/CLI tests.
 Go CLI tests receive dedicated `HOME` **and** `USERPROFILE` plus existing build

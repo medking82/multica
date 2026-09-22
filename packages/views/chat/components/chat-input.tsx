@@ -11,8 +11,8 @@ import {
   FileDropOverlay,
   useUploadGate,
   useComposerSubmit,
-  VoiceInputButton,
 } from "../../editor";
+import { VoiceInputButton } from "../../editor/voice-input-button";
 import { PASTE_AS_FILE_THRESHOLD } from "../../editor/paste-as-file";
 import {
   useCoordinatedUploads,

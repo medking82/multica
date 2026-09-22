@@ -434,7 +434,6 @@ vi.mock("../editor", async () => {
     ...composer,
     useFileDropZone: () => ({ isDragOver: false, dropZoneProps: {} }),
     FileDropOverlay: () => null,
-    VoiceInputButton: () => null,
     ContentEditor,
     TitleEditor,
   };
