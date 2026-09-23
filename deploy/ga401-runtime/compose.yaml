@@ -1,7 +1,7 @@
 name: multica-ga401-runtime
 services:
   runtime:
-    image: multica-ga401-runtime:20260831-3
+    image: multica-ga401-runtime:20260923-2
     pull_policy: never
     hostname: GA401-Multica
     user: "1000:1000"

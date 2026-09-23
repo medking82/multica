@@ -1,13 +1,14 @@
 # GA401 provider CLI hot update
 
-Deployment-only extension of the reviewed `20260831-3` runtime. It keeps the
-Multica daemon, base OS/Node/Chromium, provider accounts and private runtime home.
+Candidate extension of the reviewed runtime with the pinned trixie/glibc 2.41
+base and refreshed Node/Chromium layer. It keeps the pinned Multica daemon
+identity and does not access provider accounts or the private runtime home.
 The custom Windows Desktop and the separate signed-in browser are not involved.
 
 ## Update contract
 
-- Once per 24 hours, discover official stable Codex, Claude and Antigravity CLI
-  releases. Claude's `stable` channel may lag `latest`; never downgrade an existing
+- Once per 24 hours, discover official latest Codex, Claude and Antigravity CLI
+  releases. Claude's `latest` channel is signed and verified; never downgrade an existing
   newer version. No prereleases or runtime/model/provider reassignment.
 - Download to staging, check publisher integrity, unpack complete packages, then
   atomically install a *new* version directory. No `curl | sh`, in-place overwrite,
@@ -37,10 +38,10 @@ installer's manifest. HTTPS redirects and artifact paths are allowlisted. These
 checks trust the publishers and their distribution infrastructure; they cannot
 prove that a publisher release is bug-free or that an account will still log in.
 
-Codex 0.151.0 retains the earlier documented optional zsh GLIBC_2.38 exception only
-with a verified disabled `shell_zsh_fork`. Later versions must pass the probe or
-wait for a base-image update; no feature setting is silently disabled. Basic
-Bash/Code Mode execution was independently verified by the preceding POC-5 repair.
+Codex 0.156.1 runs on the candidate trixie/glibc 2.41 base; bundled zsh must pass
+the native probe. A failed probe holds promotion and requires a base-image update;
+no feature setting is silently disabled. Basic Bash/Code Mode execution remains
+independently verified by the preceding POC-5 repair.
 
 Multica resolves symlinks at startup, so its three CLI entrypoints are fixed regular
 wrapper files, not a `current` symlink. Multica's version metadata refresh is about

@@ -1,4 +1,4 @@
-FROM multica-ga401-runtime:20260831-hot2 AS runtime
+FROM multica-ga401-runtime:20260923-hot1 AS runtime
 USER 0:0
 COPY browser_common.py browser_updater.py browser_validator.py browser_launcher.py \
      browser_watch.py browser_probe.cjs profile_guard.py seed_browser.py /opt/runtime/browser-update/

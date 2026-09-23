@@ -11,8 +11,8 @@ spec = importlib.util.spec_from_file_location('base_policy', Path(__file__).pare
 base = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(base)
 PROJECT = base.PROJECT
-IMAGE = PROJECT + ':20260831-hot2'
-IMAGE_ID = 'sha256:d69f3f5f17ae3c19f731e6a8dd0c915497c93629920b32716f9a8cb15b2e3082'
+IMAGE = PROJECT + ':20260923-hot1'
+IMAGE_ID = 'sha256:1397ca113bbeb891ef92e30f1f07c338ced175aaa7f98ef9e1ceee20e17751a5'
 SIDECARS = {'updater': (1001, 1, 64), 'validator': (1002, 2, 128)}
 MOUNTS = {
     'runtime': [('runtime-home', '/home/agent', False), ('cli-tools', '/opt/agent-tools', True)],

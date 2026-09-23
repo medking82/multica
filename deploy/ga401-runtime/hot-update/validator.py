@@ -2,7 +2,6 @@
 """No network, account HOME, Docker socket or tools write access in this service."""
 import argparse
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -106,16 +105,7 @@ def validate_native(directory, provider, v):
             zsh = directory / 'codex-resources/zsh/bin/zsh'
             result = run_probe([zsh, '--version'], home)
             if result.returncode:
-                # Only reuse the previously reviewed exact 0.151.0 optional ABI exception.
-                require(v == '0.151.0', 'New Codex bundled zsh ABI failure; base image review required')
-                features = run_probe([executable, 'features', 'list'], home)
-                require(features.returncode == 0, 'Cannot establish optional zsh feature state')
-                spec = importlib.util.spec_from_file_location('old_bundle_check',
-                    Path('/opt/runtime/verify-codex-bundle.py'))
-                old = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(old)
-                old.optional_zsh_gap(zsh, result, features.stdout)
-                warnings.append('0.151.0 optional zsh needs GLIBC_2.38; shell_zsh_fork is false')
+                require(False, 'Codex bundled zsh ABI failure; base image review required')
             else:
                 checks.append('bundled-zsh')
             initialize_codex(executable, home)

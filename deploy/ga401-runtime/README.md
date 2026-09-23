@@ -79,17 +79,17 @@ new runtime and report the exact state. Do not delete volumes, revoke credential
 stop active tasks, or roll back without current authority. A later authorized rollback
 can stop only this Compose project, preserving its home volume and all existing data.
 
-<!-- sop-risk-classification: {"facts":{"blast_radius":"shared","change_kind":"infrastructure","data_boundary":"sensitive","destructive":"no","failure_cost":"material","irreversibility":"reversible","operational_controls":"not_applicable","privilege_boundary":"changed","project_policy":"default","rollback":"easy","scope_knowledge":"known","uncertainty":"low","verification":"deterministic"},"formal_review":"required","kind":"risk-classification-assessment","reasons":{"formal_review":["high_risk_requires_review"],"risk":["infrastructure_change","privilege_boundary_change"]},"risk":"high","schema_version":2} -->
+<!-- sop-risk-classification: {"facts":{"blast_radius":"shared","change_kind":"infrastructure","data_boundary":"sensitive","destructive":"no","failure_cost":"material","irreversibility":"reversible","operational_controls":"not_applicable","privilege_boundary":"unchanged","project_policy":"default","rollback":"easy","scope_knowledge":"known","uncertainty":"low","verification":"deterministic"},"formal_review":"required","kind":"risk-classification-assessment","reasons":{"formal_review":["high_risk_requires_review"],"risk":["infrastructure_change"]},"risk":"high","schema_version":2} -->
 
 ## Pinned software
 
 | Component | Version/source |
 | --- | --- |
-| Multica CLI | Official `v0.4.36`, Linux amd64 release and published SHA-256 |
-| Codex | GA401-installed `0.151.0` complete native package, six hashed files |
-| Claude Code | GA401-installed `2.1.251` native executable, hashed snapshot |
-| Antigravity | GA401-installed `1.1.22` native executable, hashed snapshot |
-| Node | Official Node 22 bookworm-slim image, pinned amd64 manifest digest |
+| Multica CLI | GA401 custom `0.4.39-ga401.84af6325`, exact live baseline binary SHA-256 pinned |
+| Codex | Official `0.156.1-linux-x64` complete native package, 44 hashed files including voice companions |
+| Claude Code | GA401-installed `2.1.280` native executable, signed manifest and hashed snapshot |
+| Antigravity | GA401-installed `1.2.8` native executable, hashed snapshot |
+| Node | Official Node 22 trixie-slim image, pinned amd64 manifest digest |
 | pnpm | `10.28.2` |
 | Playwright / Chromium | `1.62.1`, browser bundled by that package |
 | Playwright MCP | `0.0.79`, explicit Chromium executable from the stable package |
@@ -104,22 +104,16 @@ Playwright browser revisions different from this image's preinstalled version.
 
 The first execution smoke, POC-5, exposed a packaging omission: authentication and
 model inference succeeded, but the standalone main binary could not locate
-`codex-code-mode-host`. Codex 0.151.0 is a package, not just one executable. Keep its
-`bin/codex`, `bin/codex-code-mode-host`, `codex-path/rg`, `codex-resources/bwrap`,
-`codex-resources/zsh/bin/zsh`, and `codex-package.json` together. The CLI symlink
-resolves to that complete package.
-`verify-codex-bundle.py` checks the allowlisted layout, manifest, executable modes,
-and all six hashes in both the source and installed package; it rejects missing
+`codex-code-mode-host`. Codex is a package, not just one executable. Keep its six
+core files and the official `codex-resources/voice/` companion tree together. The
+CLI symlink resolves to that complete package.
+`verify-codex-bundle.py` checks the exact 44-file layout, manifest, executable modes,
+and every pinned hash in both the source and installed package; it rejects missing
 companions, mixed versions and extra files.
 
-Compatibility limit: the bundled patched zsh needs GLIBC 2.38 while v1 bookworm
-provides 2.36. It is not used by the current default Bash path: Codex 0.151.0
-requires `shell_zsh_fork` for both session-shell and unified-exec zsh selection,
-and that flag is false in both the clean candidate and the live profile.
-The executable probe still runs zsh and reports `OPTIONAL_UNSUPPORTED` only for
-this exact loader error and a verified disabled flag; an enabled/unknown flag or
-any different failure remains fatal. Do not enable this experimental feature on
-this base. No feature is disabled or configuration rewritten by this repair.
+The trixie/glibc 2.41 base satisfies the bundled zsh ABI. The executable probe
+still runs zsh and fails closed on any loader or feature-contract error; no feature
+is disabled and no configuration is rewritten by this candidate.
 The full-package hash check and mandatory helper probes remain required, followed
 by actual default-path command execution in POC-5; an optional warning alone does
 not demonstrate working Code Mode. This boundary avoids an unrelated base upgrade.

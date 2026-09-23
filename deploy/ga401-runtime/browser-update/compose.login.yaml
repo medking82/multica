@@ -1,7 +1,7 @@
 name: multica-ga401-browser
 services:
   login:
-    image: multica-ga401-browser:20260831-browser1
+    image: multica-ga401-browser:20260923-browser1
     pull_policy: never
     hostname: GA401-Browser
     user: "1000:1000"
@@ -36,7 +36,7 @@ services:
       driver: json-file
       options: {max-size: 1m, max-file: "2"}
   validator:
-    image: multica-ga401-browser:20260831-browser1
+    image: multica-ga401-browser:20260923-browser1
     pull_policy: never
     user: "1002:1002"
     init: true

@@ -35,7 +35,7 @@ def approved_url(url):
             'Only allowlisted public HTTPS release URLs are accepted')
     paths = {
         'registry.npmjs.org': r'/@openai/codex/(latest|[0-9.]+-linux-x64|-/codex-[0-9.]+-linux-x64\.tgz)',
-        'downloads.claude.ai': r'/claude-code-releases/(stable|[0-9.]+/(manifest\.json(\.sig)?|linux-x64/claude))',
+        'downloads.claude.ai': r'/claude-code-releases/(latest|stable|[0-9.]+/(manifest\.json(\.sig)?|linux-x64/claude))',
         'antigravity-cli-auto-updater-974169037036.us-central1.run.app': r'/manifests/linux_amd64\.json',
         'storage.googleapis.com': r'/antigravity-public/antigravity-cli/[0-9.]+-[0-9]+/linux-x64/cli_linux_x64\.tar\.gz',
     }
@@ -96,7 +96,9 @@ def discover(provider):
         return {'version': v, 'url': approved_url(package['dist']['tarball']),
                 'algorithm': 'sha512', 'checksum': digest.hex()}
     if provider == 'claude':
-        v = fetch(CLAUDE + '/stable').decode().strip()
+        # The signed manifest is still mandatory; latest is the publisher's
+        # latest release channel and avoids silently lagging the live baseline.
+        v = fetch(CLAUDE + '/latest').decode().strip()
         version(v)
         return {'version': v, 'url': CLAUDE + '/' + v + '/linux-x64/claude'}
     require(provider == 'agy', 'Unknown provider')

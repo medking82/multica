@@ -7,17 +7,17 @@ import subprocess
 from common import ROOT, RESULTS, BASE_ID, make_record, require, sha256
 
 SEED = {
-    'codex': ('0.151.0', Path('/opt/codex/0.151.0'), None),
-    'claude': ('2.1.251', Path('/usr/local/bin/claude'),
-               'fd5f10ff0eb58daec04900466b143ea98aab50abf208a422bc008eaec13f61f7'),
-    'agy': ('1.1.22', Path('/usr/local/bin/agy'),
-            '2822292f90deea4556938a8728fe4ed02a1d66d1525cf75fa07a171e36a38c25'),
+    'codex': ('0.156.1', Path('/opt/codex/0.156.1'), None),
+    'claude': ('2.1.280', Path('/usr/local/bin/claude'),
+               '1e08503dbdf3c2cb0d706d32f3408277388d1c76ef108673e8fe42c1b322925b'),
+    'agy': ('1.2.8', Path('/usr/local/bin/agy'),
+            'c20434f0b9278196498069dac5a0a2e72bc0b5f8aebdf17c5d535b5369b76f67'),
 }
 
 
 if __name__ == '__main__':
     require(os.getuid() == 0 and not ROOT.exists(), 'Seed runs once during image build only')
-    subprocess.run(['python3', '/opt/runtime/verify-codex-bundle.py', '/opt/codex/0.151.0'], check=True)
+    subprocess.run(['python3', '/opt/runtime/verify-codex-bundle.py', '/opt/codex/0.156.1'], check=True)
     ROOT.mkdir(mode=0o755)
     for provider, (v, source, digest) in SEED.items():
         parent = ROOT / provider

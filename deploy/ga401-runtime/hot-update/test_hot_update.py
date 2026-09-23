@@ -114,7 +114,7 @@ class ContractTests(unittest.TestCase):
                 common.version(value)
 
     def test_publisher_url_allowlist_and_redirects(self):
-        for url in (updater.NPM + '/latest', updater.CLAUDE + '/stable', updater.AGY,
+        for url in (updater.NPM + '/latest', updater.CLAUDE + '/latest', updater.CLAUDE + '/stable', updater.AGY,
                     'https://registry.npmjs.org/@openai/codex/-/codex-0.151.0-linux-x64.tgz'):
             self.assertEqual(updater.approved_url(url), url)
         for url in ('http://registry.npmjs.org/@openai/codex/latest', 'https://127.0.0.1/x',

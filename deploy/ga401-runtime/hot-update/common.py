@@ -17,7 +17,7 @@ except ImportError:  # Pure contract tests also run on Windows.
 ROOT = Path('/opt/agent-tools')
 RESULTS = Path('/opt/validation-results')
 PROVIDERS = ('codex', 'claude', 'agy')
-BASE_ID = 'sha256:fdb46cfe7d838a3c7c246106ca2fa330fcb9578b915b58adb264f2d222562f94'
+BASE_ID = 'sha256:01699a2210055a13f623e7c38ff80aafce5972e0911edf336293aa653147055e'
 MAX_BYTES = 1536 * 1024**2
 MAX_FILES = 128
 DAY = 86400

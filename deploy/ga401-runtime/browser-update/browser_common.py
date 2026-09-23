@@ -14,7 +14,7 @@ from common import atomic_json, canonical, lock, require, sha256, sync_dir, vers
 ROOT = Path('/opt/browser-tools')
 RESULTS = Path('/opt/validation-results')
 BASES = {
-    'runtime': 'sha256:d69f3f5f17ae3c19f731e6a8dd0c915497c93629920b32716f9a8cb15b2e3082',
+    'runtime': 'sha256:1397ca113bbeb891ef92e30f1f07c338ced175aaa7f98ef9e1ceee20e17751a5',
     'login': 'sha256:cebf16fb1624877aa17d5a3232a475fadb01c60c20f6937b680426c789cd9edc',
 }
 DAY = 86400

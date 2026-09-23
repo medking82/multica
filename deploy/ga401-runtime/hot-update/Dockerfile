@@ -1,4 +1,4 @@
-FROM multica-ga401-runtime:20260831-3
+FROM multica-ga401-runtime:20260923-2
 USER 0:0
 COPY common.py launcher.py updater.py validator.py seed.py claude-release.asc /opt/runtime/hot-update/
 COPY launch-codex.sh launch-claude.sh launch-agy.sh /opt/runtime/hot-update/

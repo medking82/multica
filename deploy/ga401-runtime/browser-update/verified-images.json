@@ -26,7 +26,7 @@
       "XAUTHORITY=/home/browser/.Xauthority",
       "PLAYWRIGHT_SKIP_BROWSER_GC=1"
     ],
-    "id": "sha256:dd47617dff0485623674e16ef417d5eb9ddcfeceea447303a6fcf5e3f3ad6a30"
+    "id": "sha256:d98078c71f2aac8811365109b61d7d71554ec3128613daa7fef264873d6091c5"
   },
   "runtime": {
     "command": null,
@@ -51,6 +51,6 @@
       "PYTHONUTF8=1",
       "PLAYWRIGHT_SKIP_BROWSER_GC=1"
     ],
-    "id": "sha256:fbebe860e8ab842e3a5f98e20383752fb7a64e32f6877b01e8641e83b03fa13f"
+    "id": "sha256:1a3b42bbfa63702d21717c23e522eb64c973fc35238a2447ec13295fa1129738"
   }
 }

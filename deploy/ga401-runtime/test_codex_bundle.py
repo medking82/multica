@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,7 +20,7 @@ class CodexBundleTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "package"
         self.hashes = {}
-        for name in bundle.FILES:
+        for name in bundle.pinned_hashes():
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             data = json.dumps(bundle.MANIFEST).encode() if name == "codex-package.json" else name.encode()
@@ -34,7 +35,15 @@ class CodexBundleTests(unittest.TestCase):
         self.verify(self.root / "bin/codex")
 
     def test_production_pins_cover_all_files(self):
-        self.assertEqual(set(bundle.pinned_hashes()), bundle.FILES)
+        pins = bundle.pinned_hashes()
+        self.assertEqual(len(pins), 44)
+        self.assertIn("codex-resources/voice/bin/codex-voice-host", pins)
+        self.assertIn("codex-resources/zsh/bin/zsh", pins)
+
+    def test_rejects_missing_voice_companion(self):
+        (self.root / "codex-resources/voice/bin/codex-voice-host").unlink()
+        with self.assertRaisesRegex(ValueError, "layout"):
+            self.verify()
 
     def test_rejects_missing_helper_regression(self):
         (self.root / "bin/codex-code-mode-host").unlink()
@@ -110,55 +119,59 @@ class CodexBundleTests(unittest.TestCase):
             self.verify()
 
 
-class OptionalZshCompatibilityTests(unittest.TestCase):
-    zsh_path = Path("/opt/codex/0.151.0/codex-resources/zsh/bin/zsh")
-    disabled = "shell_zsh_fork under development false\nunified_exec_zsh_fork removed true\n"
-
-    def result(self, returncode=1, stdout="", extra=""):
-        stderr = "\n".join(
-            f"{self.zsh_path}: /lib/x86_64-linux-gnu/{library}.so.6: version `GLIBC_2.38' "
-            f"not found (required by {self.zsh_path})" for library in ("libm", "libc")) + "\n" + extra
-        return CompletedProcess([], returncode, stdout, stderr)
-
-    def test_known_unused_abi_gap_is_explicitly_classified(self):
-        bundle.optional_zsh_gap(self.zsh_path, self.result(), self.disabled)
-
-    def test_enabled_zsh_fork_never_bypasses_failure(self):
-        with self.assertRaisesRegex(ValueError, "enabled or its feature state is unknown"):
-            bundle.optional_zsh_gap(self.zsh_path, self.result(), self.disabled.replace("false", "true"))
-
-    def test_missing_ambiguous_or_changed_feature_state_fails_closed(self):
-        for state in ("", self.disabled * 2, self.disabled.replace("under development", "stable")):
-            with self.subTest(state=state), self.assertRaises(ValueError):
-                bundle.optional_zsh_gap(self.zsh_path, self.result(), state)
-
-    def test_other_loader_failure_is_not_ignored(self):
-        for result in (self.result(returncode=127), self.result(stdout="unexpected"),
-                       self.result(extra="another failure\n"),
-                       CompletedProcess([], 1, "", "Permission denied")):
-            with self.subTest(result=result), self.assertRaisesRegex(ValueError, "Unexpected"):
-                bundle.optional_zsh_gap(self.zsh_path, result, self.disabled)
-
+class CompanionProbeTests(unittest.TestCase):
     def test_mandatory_helper_failure_stops_the_probe(self):
         with patch.object(bundle.subprocess, "run", return_value=CompletedProcess([], 1, "", "missing")) as run:
             with self.assertRaisesRegex(ValueError, "codex-code-mode-host probe failed"):
-                bundle.probe_companions(Path("/opt/codex/0.151.0"))
+                bundle.probe_companions(Path("/opt/codex/0.156.1"))
             self.assertEqual(run.call_count, 1)
 
-    def test_probe_reports_known_gap_and_does_not_override_features(self):
+    def test_zsh_abi_failure_is_fatal(self):
         ok = CompletedProcess([], 0, "version", "")
-        with patch.object(bundle.subprocess, "run", side_effect=[ok, ok, ok, self.result(),
-                          CompletedProcess([], 0, self.disabled, "")]) as run:
-            bundle.probe_companions(Path("/opt/codex/0.151.0"))
-            self.assertEqual(run.call_args.args[0][1:], ["features", "list"])
-            self.assertEqual(run.call_count, 5)
+        failed = CompletedProcess([], 1, "", "loader failure")
+        with patch.object(bundle.subprocess, "run", side_effect=[ok, ok, ok, failed]):
+            with self.assertRaisesRegex(ValueError, "Bundled zsh ABI probe failed"):
+                bundle.probe_companions(Path("/opt/codex/0.156.1"))
 
-    def test_failed_feature_probe_never_assumes_disabled(self):
+    def test_all_companions_probe_success(self):
         ok = CompletedProcess([], 0, "version", "")
-        with patch.object(bundle.subprocess, "run", side_effect=[ok, ok, ok, self.result(),
-                          CompletedProcess([], 1, "", "failed")]):
-            with self.assertRaisesRegex(ValueError, "Cannot determine"):
-                bundle.probe_companions(Path("/opt/codex/0.151.0"))
+        with patch.object(bundle.subprocess, "run", return_value=ok) as run:
+            bundle.probe_companions(Path("/opt/codex/0.156.1"))
+            self.assertEqual(run.call_count, 4)
+
+
+@unittest.skipUnless(os.name == "posix", "Linux staging and symlink contract")
+class PackageDirectoryStagingTests(unittest.TestCase):
+    def run_prepare(self, root):
+        source = Path(__file__).with_name("prepare-assets.sh").read_text()
+        body = source.split("prepare_package_directories() {", 1)[1].split("\n}", 1)[0]
+        script = "set -eu\numask 077\nprepare_package_directories() {" + body + "\n}\n"
+        script += "prepare_package_directories .assets/codex-bundle/codex-resources/zsh/bin\n"
+        return subprocess.run(["bash", "-c", script], cwd=root, capture_output=True, text=True)
+
+    def test_fresh_staging_opens_every_package_ancestor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / ".assets").mkdir(mode=0o700)
+            result = self.run_prepare(root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            path = root / ".assets/codex-bundle/codex-resources/zsh/bin"
+            while path != root / ".assets":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o755, str(path))
+                path = path.parent
+            self.assertEqual((root / ".assets").stat().st_mode & 0o777, 0o700)
+
+    def test_linked_ancestor_is_refused_before_external_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / ".assets").mkdir()
+            external = root / "external"
+            external.mkdir()
+            (root / ".assets/codex-bundle").symlink_to(external, target_is_directory=True)
+            result = self.run_prepare(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Refusing symlinked package directory", result.stderr)
+            self.assertEqual(list(external.iterdir()), [])
 
 
 if __name__ == "__main__":

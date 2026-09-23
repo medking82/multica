@@ -1,7 +1,7 @@
 name: multica-ga401-runtime
 services:
   runtime:
-    image: multica-ga401-runtime:20260831-hot2
+    image: multica-ga401-runtime:20260923-hot1
     pull_policy: never
     hostname: GA401-Multica
     user: "1000:1000"
@@ -32,7 +32,7 @@ services:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}
   updater:
-    image: multica-ga401-runtime:20260831-hot2
+    image: multica-ga401-runtime:20260923-hot1
     pull_policy: never
     user: "1001:1001"
     init: true
@@ -60,7 +60,7 @@ services:
       driver: json-file
       options: {max-size: 2m, max-file: "3"}
   validator:
-    image: multica-ga401-runtime:20260831-hot2
+    image: multica-ga401-runtime:20260923-hot1
     pull_policy: never
     user: "1002:1002"
     init: true
