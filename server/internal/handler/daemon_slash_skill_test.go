@@ -2,9 +2,13 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -73,6 +77,126 @@ func TestMergeTaskSkillsDoesNotMutateConfiguredBackingArray(t *testing.T) {
 	}
 	if configured[:cap(configured)][2].ID != "" {
 		t.Fatal("mergeTaskSkills wrote selected data into configured backing array")
+	}
+}
+
+func TestSelectedSkillMergePreservesAgentBuiltinScope(t *testing.T) {
+	svc := &service.TaskService{}
+	h := &Handler{TaskService: svc}
+	for _, key := range []string{"", service.MikaSystemKey} {
+		for _, legacy := range []bool{false, true} {
+			for _, refs := range []bool{false, true} {
+				t.Run(fmt.Sprintf("system=%s/legacy=%t/refs=%t", key, legacy, refs), func(t *testing.T) {
+					builtins := svc.BuiltinSkills(key, legacy)
+					agent := &TaskAgentData{}
+					if refs {
+						_, agent.SkillRefs = service.BuildAgentSkillBundles(builtins)
+					} else {
+						agent.Skills = builtins
+					}
+					before := *agent
+					resp := AgentTaskResponse{WorkspaceID: "11111111-1111-4111-8111-111111111111", Agent: agent}
+					added, failure := h.applyClaimTaskSkills(context.Background(), db.AgentTaskQueue{}, &resp, refs, nil)
+					if failure != nil || added != 0 || !reflect.DeepEqual(before, *agent) {
+						t.Fatalf("unchosen grant changed scoped built-ins: added=%d failure=%+v before=%+v after=%+v", added, failure, before, *agent)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestFinalizeClaimDeliveryAllowsNilResponse(t *testing.T) {
+	ctx := context.Background()
+	runtimeID := createClaimReclaimRuntime(t, ctx, "Nil response runtime")
+	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, runtimeID, "Nil response agent")
+	seedQueuedIssueTask(t, ctx, agentID, runtimeID, issueID)
+	task, err := testHandler.TaskService.ClaimTaskForRuntime(ctx, parseUUID(runtimeID))
+	if err != nil || task == nil {
+		t.Fatalf("claim fixture: task=%v err=%v", task, err)
+	}
+	runtime, err := testHandler.Queries.GetAgentRuntimeForWorkspace(ctx, db.GetAgentRuntimeForWorkspaceParams{ID: parseUUID(runtimeID), WorkspaceID: parseUUID(testWorkspaceID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, failure, err := testHandler.finalizeClaimDelivery(ctx, task, runtime, runtimeID, testWorkspaceID, nil, db.CreateTaskTokenParams{
+		TokenHash: "nil-response-" + uuidToString(task.ID), TaskID: task.ID, AgentID: task.AgentID,
+		WorkspaceID: parseUUID(testWorkspaceID), UserID: parseUUID(testUserID),
+		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+	}, nil, false, nil)
+	if err != nil || failure != nil {
+		t.Fatalf("nil response finalization: failure=%+v err=%v", failure, err)
+	}
+	var count int
+	dbfx.QueryRow(t, `SELECT count(*) FROM task_token WHERE task_id = $1`, task.ID).Scan(&count)
+	if count != 1 {
+		t.Fatalf("finalized token count = %d, want 1", count)
+	}
+}
+
+func TestClaimSelectedSkillFromChatAndQuickCreate(t *testing.T) {
+	for _, kind := range []string{"chat", "quick-create"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			skillID := dbfx.Insert(t, "skill", testutil.Cols{
+				"workspace_id": testWorkspaceID, "name": "selected-" + kind,
+				"description": "one run only", "content": "selected content",
+				"config": testutil.Raw("'{}'::jsonb"), "created_by": testUserID,
+			})
+			prompt := "use [/selected](slash://skill/" + skillID + ")"
+			var agentID, sessionID, runtimeID, daemonID, taskID string
+			if kind == "chat" {
+				agentID, sessionID, runtimeID, daemonID = setupDirectChatSession(t, ctx, "selected Skill chat")
+				taskID = sendDirectChat(t, ctx, agentID, sessionID, prompt)
+			} else {
+				agentID, runtimeID, daemonID = createRuntimeGuardAgent(t, ctx)
+				payload, err := json.Marshal(map[string]string{"type": "quick_create", "prompt": prompt, "requester_id": testUserID, "workspace_id": testWorkspaceID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				taskID = dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "context": payload})
+			}
+			claim := func() *AgentTaskResponse {
+				t.Helper()
+				req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, daemonID)
+				req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilitySkillBundlesV1)
+				req = withURLParam(req, "runtimeId", runtimeID)
+				var body struct {
+					Task *AgentTaskResponse `json:"task"`
+				}
+				testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK).JSON(&body)
+				if body.Task == nil || body.Task.Agent == nil {
+					t.Fatal("missing claimed task")
+				}
+				return body.Task
+			}
+			first := claim()
+			var selected service.AgentSkillRefData
+			for _, ref := range first.Agent.SkillRefs {
+				if ref.ID == skillID {
+					selected = ref
+				}
+			}
+			if selected.ID == "" {
+				t.Fatal("selected Skill missing after loading task input")
+			}
+			if kind == "chat" {
+				markTaskRunning(t, ctx, taskID)
+				if _, err := testHandler.TaskService.CompleteTask(ctx, parseUUID(taskID), completeResult(t, "done"), "", "", "", false, "", ""); err != nil {
+					t.Fatal(err)
+				}
+				nextID := sendDirectChat(t, ctx, agentID, sessionID, "next task without a Skill selection")
+				next := claim()
+				for _, ref := range next.Agent.SkillRefs {
+					if ref.ID == skillID {
+						t.Fatal("later Run inherited previous selection")
+					}
+				}
+				req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/tasks/"+nextID+"/skill-bundles/resolve", resolveSkillBundlesRequest{Skills: []resolveSkillBundleRef{{ID: selected.ID, Source: selected.Source, Hash: selected.Hash}}}, testWorkspaceID, daemonID)
+				req = withURLParams(req, "runtimeId", runtimeID, "taskId", nextID)
+				testutil.Call(t, testHandler.ResolveTaskSkillBundles, req).Want(http.StatusNotFound)
+			}
+		})
 	}
 }
 
@@ -201,10 +325,14 @@ func TestClaimTaskByRuntime_SelectedWorkspaceSkillGrant(t *testing.T) {
 		issueID,
 		"please [/selected-workspace-skill](slash://skill/"+selectedID+")",
 	)
+	agentCommentID := dbfx.Comment(t, issueID,
+		"[/agent-suggested](slash://skill/"+unselectedID+")",
+		testutil.Cols{"author_type": "agent", "author_id": agentID})
 	taskID := dbfx.Task(t, agentID, testutil.Cols{
-		"runtime_id":         runtimeID,
-		"issue_id":           issueID,
-		"trigger_comment_id": triggerID,
+		"runtime_id":            runtimeID,
+		"issue_id":              issueID,
+		"trigger_comment_id":    triggerID,
+		"coalesced_comment_ids": []string{triggerID, agentCommentID},
 	})
 
 	req := newDaemonTokenRequest(

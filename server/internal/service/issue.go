@@ -6,16 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
-	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issueposition"
+	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -82,7 +84,11 @@ type IssueCreateParams struct {
 	// so the issue is never committed with a partial or wrong label set. An
 	// unknown or non-issue label id fails the whole create with
 	// ErrIssueLabelNotFound rather than being silently dropped.
-	LabelIDs       []pgtype.UUID
+	LabelIDs []pgtype.UUID
+	// Properties is keyed only by property-definition UUID. Create validates
+	// and canonicalizes every value while holding the same per-definition locks
+	// used by the standalone PUT path, then inserts the complete bag atomically.
+	Properties     map[pgtype.UUID]json.RawMessage
 	AllowDuplicate bool
 	// Stage groups this issue into an ordered barrier group under its parent
 	// (NULL = unstaged). See issue_child_done.go for the staged-barrier wake.
@@ -160,6 +166,21 @@ var ErrProjectNotFound = errors.New("project not found in this workspace")
 // label set. Callers translate this into their transport's 400.
 var ErrIssueLabelNotFound = errors.New("issue label not found in this workspace")
 
+// ErrIssuePropertiesTooLarge is the existing row-level 16KB properties-bag
+// constraint surfaced as a client error. The same database constraint applies
+// to standalone PUT and atomic create writes.
+var ErrIssuePropertiesTooLarge = errors.New("issue properties exceed the 16KB size limit")
+
+// IssuePropertyValidationError identifies the definition whose value made an
+// atomic create invalid. Unknown and foreign-workspace IDs intentionally share
+// the same message so the API does not expose tenant existence.
+type IssuePropertyValidationError struct {
+	PropertyID string
+	Message    string
+}
+
+func (e *IssuePropertyValidationError) Error() string { return e.Message }
+
 // ErrIssueStatusUnavailable signals that the requested custom status was
 // archived between the caller's pre-flight validation and the create
 // transaction. Callers translate this into a 409 — the request was valid when
@@ -220,6 +241,11 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
+
+	properties, err := validateIssueCreateProperties(ctx, tx, qtx, p.WorkspaceID, p.Properties)
+	if err != nil {
+		return IssueCreateResult{}, err
+	}
 
 	if p.SourceContext != nil {
 		if _, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
@@ -358,6 +384,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			OriginType:    p.OriginType,
 			OriginID:      p.OriginID,
 			Stage:         p.Stage,
+			Properties:    properties,
 		})
 	} else {
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
@@ -378,15 +405,16 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			Number:        issueNumber,
 			ProjectID:     projectID,
 			Stage:         p.Stage,
+			Properties:    properties,
 		})
 	}
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.ConstraintName == "issue_properties_size_limit" {
+			return IssueCreateResult{}, ErrIssuePropertiesTooLarge
+		}
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
 	}
-	// Freeze member-authored selections from the exact create payload before
-	// any task can claim. The visible marker remains in the issue description,
-	// but only this server-owned task context grants the initial run access;
-	// later reruns do not re-read mutable issue content.
 	initialSelectedSkillIDs := selectedSkillIDsForMemberIssueCreate(issue)
 
 	if p.SourceContext != nil {
@@ -488,6 +516,9 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	if !opts.AssignedAgentRunFireAt.IsZero() {
 		assignedTaskID = assignedTask.ID
 		if assignedTaskID.Valid {
+			// The deferred task became durable with the issue at commit. Refresh the
+			// daemon's schedule only now so a wakeup can never race uncommitted data.
+			s.TaskService.notifyRuntimeMayHaveWork(assignedTask.RuntimeID, "")
 			if err := s.TaskService.hydrateDeferredChannelIssueTaskOverlay(ctx, assignedTask); err != nil {
 				// Runtime overlays are best-effort on every enqueue path. The task is
 				// already durable and safely deferred, so an optional integration
@@ -512,6 +543,77 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments, Labels: labels, AssignedTaskID: assignedTaskID}, nil
+}
+
+// validateIssueCreateProperties returns the canonical JSONB bag to put on the
+// issue row. Locks are acquired for every definition in UUID order before any
+// definition is read, matching definition updates and preventing two
+// multi-property creates from choosing opposite lock orders.
+func validateIssueCreateProperties(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID pgtype.UUID, values map[pgtype.UUID]json.RawMessage) ([]byte, error) {
+	if len(values) == 0 {
+		return []byte(`{}`), nil
+	}
+
+	ids := make([]pgtype.UUID, 0, len(values))
+	for id := range values {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(left, right int) bool {
+		return util.UUIDToString(ids[left]) < util.UUIDToString(ids[right])
+	})
+	for _, id := range ids {
+		key := "prop:" + util.UUIDToString(id)
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key); err != nil {
+			return nil, fmt.Errorf("lock issue property: %w", err)
+		}
+	}
+
+	canonical := make(map[string]json.RawMessage, len(ids))
+	for _, id := range ids {
+		propertyID := util.UUIDToString(id)
+		definition, err := qtx.GetIssueProperty(ctx, db.GetIssuePropertyParams{
+			ID: id, WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: "property not found in this workspace"}
+			}
+			return nil, fmt.Errorf("get issue property: %w", err)
+		}
+		if definition.ArchivedAt.Valid {
+			return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: fmt.Sprintf("property %q is archived and cannot receive new values", definition.Name)}
+		}
+		value, err := issueproperty.ValidateValue(definition, values[id])
+		if err != nil {
+			return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+		}
+		if issueproperty.IsActor(definition.Type) {
+			refs, err := issueproperty.ActorRefsInValue(definition.Type, value)
+			if err != nil {
+				return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: err.Error()}
+			}
+			for _, ref := range refs {
+				actorID, parseErr := util.ParseUUID(ref.ID)
+				if parseErr != nil {
+					return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: fmt.Sprintf("actor id in %q must be a UUID", ref)}
+				}
+				if _, lookupErr := qtx.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
+					UserID: actorID, WorkspaceID: workspaceID,
+				}); lookupErr != nil {
+					if errors.Is(lookupErr, pgx.ErrNoRows) {
+						return nil, &IssuePropertyValidationError{PropertyID: propertyID, Message: fmt.Sprintf("%q does not refer to a member of this workspace", ref)}
+					}
+					return nil, fmt.Errorf("resolve issue property actor: %w", lookupErr)
+				}
+			}
+		}
+		canonical[propertyID] = value
+	}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("encode issue properties: %w", err)
+	}
+	return encoded, nil
 }
 
 // validateIssueLabels checks that every requested label exists in the
@@ -746,18 +848,20 @@ func selectedSkillIDsForMemberIssueCreate(issue db.Issue) []pgtype.UUID {
 	return selected
 }
 
-func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time, initialSelectedSkillIDs []pgtype.UUID) pgtype.UUID {
+func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time, selected ...[]pgtype.UUID) pgtype.UUID {
 	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
 		return pgtype.UUID{}
 	}
 	// Backlog is the parking lot: nothing runs from it, so nothing here needs
-	// explaining either. A custom status in the backlog category parks the
-	// same way. (MUL-6243)
-	if issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
+	// explaining either. Custom unstarted statuses do not inherit parking.
+	//
+	// Triage refuses for a different reason and so returns just as quietly: the
+	// entry is not yet work anyone agreed to do (MUL-7189 §2.3).
+	if issue.TriageState.Valid || issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
 		return pgtype.UUID{}
 	}
-	verdict, admitted := agentAssigneeVerdict(ctx, s.Queries, issue)
-	if !admitted && verdict.Reason == dispatch.ReasonRuntimeUnusable {
+	verdict, admitted := agentAssigneeVerdict(ctx, s.runtimeLookup(s.Queries), issue)
+	if !admitted && RuntimeBlockedNeedsNotice(verdict.Reason) {
 		// Assignment has no response the assigner reads for this outcome, so the
 		// refusal explains itself on the issue instead of vanishing (MUL-6164).
 		// Only here, not in the create-with-assignee path above: that one runs
@@ -769,7 +873,7 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		var task db.AgentTaskQueue
 		var err error
 		if agentRunFireAt.IsZero() {
-			task, err = s.TaskService.EnqueueTaskForIssueWithSelectedSkills(ctx, issue, initialSelectedSkillIDs)
+			task, err = s.TaskService.EnqueueTaskForIssueWithSelectedSkills(ctx, issue, firstSelectedSkillIDs(selected))
 		} else {
 			task, err = s.TaskService.EnqueueDeferredChannelIssueTask(ctx, issue, agentRunFireAt)
 		}
@@ -782,7 +886,7 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 		}
 	}
 	if s.shouldEnqueueSquadLeaderOnAssign(ctx, issue) {
-		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID, initialSelectedSkillIDs)
+		s.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, creatorType, actorID, firstSelectedSkillIDs(selected))
 	}
 	return pgtype.UUID{}
 }
@@ -799,14 +903,16 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 func (s *IssueService) shouldEnqueueAgentTaskWithQueries(ctx context.Context, q *db.Queries, issue db.Issue) bool {
 	// Resolved through q, not s.Queries: this runs inside the create
 	// transaction and must see the same snapshot as the rest of it. (MUL-6243)
-	if issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == "backlog" {
+	// That snapshot is also the only place a just-created Triage issue is
+	// visible, which is why the Triage check belongs on the same read.
+	if issue.TriageState.Valid || issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == "backlog" {
 		return false
 	}
-	return isAgentAssigneeReadyWithQueries(ctx, q, issue)
+	return isAgentAssigneeReadyWithQueries(ctx, s.runtimeLookup(q), issue)
 }
 
-func isAgentAssigneeReadyWithQueries(ctx context.Context, q *db.Queries, issue db.Issue) bool {
-	_, ok := agentAssigneeVerdict(ctx, q, issue)
+func isAgentAssigneeReadyWithQueries(ctx context.Context, lookup RuntimeLookup, issue db.Issue) bool {
+	_, ok := agentAssigneeVerdict(ctx, lookup, issue)
 	return ok
 }
 
@@ -816,15 +922,15 @@ func isAgentAssigneeReadyWithQueries(ctx context.Context, q *db.Queries, issue d
 //
 // Only a BLOCKED verdict stops the enqueue. A merely offline machine still
 // queues: that work runs when the laptop comes back, and people rely on it.
-func agentAssigneeVerdict(ctx context.Context, q *db.Queries, issue db.Issue) (AgentVerdict, bool) {
+func agentAssigneeVerdict(ctx context.Context, lookup RuntimeLookup, issue db.Issue) (AgentVerdict, bool) {
 	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
 		return AgentVerdict{}, false
 	}
-	agent, err := q.GetAgent(ctx, issue.AssigneeID)
+	agent, err := lookup.Queries.GetAgent(ctx, issue.AssigneeID)
 	if err != nil {
 		return AgentVerdict{}, false
 	}
-	verdict, err := AgentReadiness(ctx, q, agent)
+	verdict, err := AgentReadiness(ctx, lookup, agent)
 	if err != nil {
 		return AgentVerdict{}, false
 	}
@@ -832,7 +938,7 @@ func agentAssigneeVerdict(ctx context.Context, q *db.Queries, issue db.Issue) (A
 }
 
 func (s *IssueService) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db.Issue) bool {
-	if issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
+	if issue.TriageState.Valid || issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
 		return false
 	}
 	return s.isSquadLeaderReady(ctx, issue)
@@ -853,14 +959,14 @@ func (s *IssueService) isSquadLeaderReady(ctx context.Context, issue db.Issue) b
 	if err != nil {
 		return false
 	}
-	verdict, err := AgentReadiness(ctx, s.Queries, agent)
+	verdict, err := AgentReadiness(ctx, s.runtimeLookup(s.Queries), agent)
 	if err != nil {
 		return false
 	}
 	return verdict.Ready()
 }
 
-func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string, initialSelectedSkillIDs []pgtype.UUID) {
+func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID string, selected ...[]pgtype.UUID) {
 	squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          issue.AssigneeID,
 		WorkspaceID: issue.WorkspaceID,
@@ -877,7 +983,7 @@ func (s *IssueService) enqueueSquadLeaderTask(ctx context.Context, issue db.Issu
 	if err != nil || hasPending {
 		return
 	}
-	if _, err := s.TaskService.EnqueueTaskForSquadLeaderWithSelectedSkills(ctx, issue, squad.LeaderID, squad.ID, triggerCommentID, initialSelectedSkillIDs); err != nil {
+	if _, err := s.TaskService.EnqueueTaskForSquadLeaderWithSelectedSkills(ctx, issue, squad.LeaderID, squad.ID, triggerCommentID, firstSelectedSkillIDs(selected)); err != nil {
 		slog.Warn("enqueue squad leader task on create failed",
 			"issue_id", util.UUIDToString(issue.ID),
 			"squad_id", util.UUIDToString(squad.ID),

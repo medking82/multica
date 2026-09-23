@@ -11,6 +11,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/skillbundle"
 	"github.com/multica-ai/multica/server/pkg/slashskill"
 )
 
@@ -92,6 +93,9 @@ func mergeTaskSkills(
 	seen := make(map[string]struct{}, len(configured)+len(selected))
 	add := func(skill service.AgentSkillData) {
 		key := skill.Source + "\x00" + skill.ID
+		if skill.ID == "" {
+			key += "\x00" + skill.Name
+		}
 		if _, ok := seen[key]; ok {
 			return
 		}
@@ -127,14 +131,15 @@ func (h *Handler) applyClaimTaskSkills(
 	task db.AgentTaskQueue,
 	resp *AgentTaskResponse,
 	useSkillRefs bool,
-) (agentSkillCount int, builtinSkillCount int, failure *claimBuildFailure) {
+	selectedInputIDs []string,
+) (addedSkillCount int, failure *claimBuildFailure) {
 	if resp.Agent == nil {
-		return 0, 0, nil
+		return 0, nil
 	}
 
 	workspaceID, err := util.ParseUUID(resp.WorkspaceID)
 	if err != nil {
-		return 0, 0, &claimBuildFailure{
+		return 0, &claimBuildFailure{
 			outcome: "error_selected_skills",
 			status:  http.StatusInternalServerError,
 			message: "failed to resolve task workspace Skills",
@@ -142,23 +147,20 @@ func (h *Handler) applyClaimTaskSkills(
 	}
 	storedSelectedIDs, err := selectedSkillIDsFromTaskContext(task.Context)
 	if err != nil {
-		return 0, 0, &claimBuildFailure{
+		return 0, &claimBuildFailure{
 			outcome: "error_selected_skills",
 			status:  http.StatusInternalServerError,
 			message: "failed to resolve task workspace Skills",
 		}
 	}
-	selectedIDs := mergeSelectedSkillIDs(
-		storedSelectedIDs,
-		selectedSlashSkillIDsForClaim(task, *resp),
-	)
+	selectedIDs := mergeSelectedSkillIDs(storedSelectedIDs, selectedInputIDs)
 	selected, err := h.TaskService.LoadWorkspaceSkillsByIDs(
 		ctx,
 		workspaceID,
 		selectedIDs,
 	)
 	if err != nil {
-		return 0, 0, &claimBuildFailure{
+		return 0, &claimBuildFailure{
 			outcome: "error_selected_skills",
 			status:  http.StatusInternalServerError,
 			message: "failed to load selected workspace Skills",
@@ -166,17 +168,28 @@ func (h *Handler) applyClaimTaskSkills(
 	}
 
 	resp.selectedSkillIDs = selectedSkillUUIDs(selected)
-	configured := h.TaskService.LoadAgentSkills(ctx, task.AgentID)
-	workspaceSkills := mergeTaskSkills(configured, selected)
-	builtins := h.TaskService.BuiltinSkills()
+	// Preserve the already assembled agent-scoped built-ins, plugin refs and
+	// attached Skills. Only append selected workspace Skills not already present.
 	if useSkillRefs {
-		_, refs := service.BuildAgentSkillBundles(append(workspaceSkills, builtins...))
-		resp.Agent.SkillRefs = refs
-		return len(refs), 0, nil
+		_, refs := service.BuildAgentSkillBundles(selected)
+		seen := make(map[string]bool, len(resp.Agent.SkillRefs))
+		for _, ref := range resp.Agent.SkillRefs {
+			seen[service.AgentSkillBundleKey(ref.Source, ref.ID)] = true
+		}
+		for _, ref := range refs {
+			key := service.AgentSkillBundleKey(ref.Source, ref.ID)
+			if !seen[key] {
+				resp.Agent.SkillRefs = append(resp.Agent.SkillRefs, ref)
+				seen[key] = true
+				addedSkillCount++
+			}
+		}
+		return addedSkillCount, nil
 	}
 
-	resp.Agent.Skills = append(workspaceSkills, builtins...)
-	return len(workspaceSkills), len(builtins), nil
+	previousCount := len(resp.Agent.Skills)
+	resp.Agent.Skills = mergeTaskSkills(resp.Agent.Skills, selected)
+	return len(resp.Agent.Skills) - previousCount, nil
 }
 
 type persistedSelectedSkillContext struct {
@@ -204,22 +217,30 @@ func selectedSkillIDsFromTaskContext(raw []byte) ([]string, error) {
 	return stored.SelectedSkillIDs, nil
 }
 
-func (h *Handler) taskSkillBundlesForResolve(
+func (h *Handler) requestedSelectedTaskSkillBundles(
 	ctx context.Context,
 	task db.AgentTaskQueue,
 	workspaceID pgtype.UUID,
+	wanted []service.AgentSkillBundleRef,
 ) ([]service.AgentSkillData, error) {
 	selectedIDs, err := selectedSkillIDsFromTaskContext(task.Context)
 	if err != nil {
 		return nil, err
 	}
-	selected, err := h.TaskService.LoadWorkspaceSkillsByIDs(ctx, workspaceID, selectedIDs)
+	granted := make(map[string]bool, len(selectedIDs))
+	for _, id := range selectedIDs {
+		granted[id] = true
+	}
+	requested := make([]string, 0, len(wanted))
+	for _, ref := range wanted {
+		if ref.Source == skillbundle.SourceWorkspace && granted[ref.ID] {
+			requested = append(requested, ref.ID)
+		}
+	}
+	selected, err := h.TaskService.LoadWorkspaceSkillsByIDs(ctx, workspaceID, requested)
 	if err != nil {
 		return nil, err
 	}
-	configured := h.TaskService.LoadAgentSkills(ctx, task.AgentID)
-	all := mergeTaskSkills(configured, selected)
-	all = append(all, h.TaskService.BuiltinSkills()...)
-	bundles, _ := service.BuildAgentSkillBundles(all)
+	bundles, _ := service.BuildAgentSkillBundles(selected)
 	return bundles, nil
 }
