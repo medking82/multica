@@ -107,7 +107,34 @@ class Tests(unittest.TestCase):
             self.assertEqual(len(calls), 2)
             self.assertTrue(calls[1][2].endswith('prepare-quota.py'))
             self.assertIn('--allow-gemini', calls[1])
+            self.assertEqual(calls[1][calls[1].index('--gemini-source') + 1], 'native')
+            self.assertEqual(calls[1][calls[1].index('--claude-source') + 1], 'hardware-pulse')
             self.assertNotIn('--allow-sonnet', calls[1])
+
+    def test_retired_checkout_is_rejected_without_creating_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d) / 'state'
+            with self.assertRaisesRegex(cycle.Failure, 'unexpected automation checkout'):
+                cycle.Cycle(Path(r'C:\github\multica-ga401-upgrade-0439'), state)
+            self.assertFalse(state.exists())
+
+    def test_explicit_claude_observation_preserves_source_choice(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            observation = root / 'claude-quota-input.json'
+            observation.write_text('{}', encoding='utf-8')
+            owner = cycle.Cycle(cycle.REPO, root)
+            calls = []
+            def command(args, **kwargs):
+                calls.append(args)
+                if args[2].endswith('risk-classification.py'):
+                    return json.dumps({'risk': 'high', 'formal_review': 'required'})
+                raise cycle.Failure('stop before inference')
+            owner.command = command
+            with self.assertRaisesRegex(cycle.Failure, 'stop before inference'):
+                owner.review()
+            self.assertEqual(calls[1][calls[1].index('--claude-input') + 1], str(observation))
+            self.assertNotIn('--claude-source', calls[1])
 
     def test_selected_review_binds_single_attempt_and_archived_quota(self):
         with tempfile.TemporaryDirectory() as d:

@@ -7,10 +7,10 @@ HEX40 = __import__('re').compile(r"^[0-9a-f]{40}$")
 REMOTE = "/home/marck/services/multica/upgrades"
 SCRIPT = "deploy/ga401-upgrade/upgrade.py"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-GO = Path(r'C:\Users\Marck\AppData\Local\Temp\multica-go-1.26.6\go\bin\go.exe')
+GO = Path(r'C:\github\tools\upstream\toolchains\go1.26.8\go\bin\go.exe')
 NODE = Path(r'C:\Program Files\nodejs\node.exe')
 PNPM = Path(r'C:\Users\Marck\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\node_modules\pnpm\bin\pnpm.mjs')
-PNPM_SHIM = Path(r'C:\Users\Marck\AppData\Local\Temp\multica-pnpm10\pnpm.cmd')
+PNPM_SHIM = Path(__file__).with_name('pnpm.cmd')
 FIXTURE = 'multica-ga401-upgrade-tests'
 FIXTURE_URL = 'postgres://multica_fixture:multica_fixture_local@127.0.0.1:13312/multica_repair?sslmode=disable'
 

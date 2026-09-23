@@ -15,11 +15,31 @@ never wakes a Codex conversation.
 
 `install-scheduler.ps1` extracts exact committed files into a versioned directory
 under `%LOCALAPPDATA%\MulticaAutoUpdate`. Every invocation verifies their SHA-256
-hashes. The reserved checkout is `C:\github\multica-ga401-upgrade-0439`, branch
+hashes. The reserved checkout is `C:\github\tools\upstream\multica-ga401`, branch
 `codex/ga401-upgrade-0439`. User edits, remote drift, an incomplete SOP run or a
 previous failed/interrupted cycle stop before further changes. Inspect task
 status and next run with `scheduler-status.ps1`; receipts and command logs live
 in the installation root's `state` directory. No email is sent by this kit.
+
+This checkout is retained while the scheduler is enrolled; it must not be retired
+as a temporary release worktree. Its Git owner remains `C:\github\tools\multica`.
+Reinstallation automatically reuses the physical directory in the registered
+task action, including Codex MSIX installations. An explicit `-InstallationRoot`
+must match it; moving a registered task to a different state root is refused.
+Preserve that root and its failed-cycle evidence; relocation does not authorize clearing
+`needs_attention` or restarting a failed update.
+
+The task starts through `wscript.exe` and a windowless launcher; PowerShell then
+uses the canonical hidden Python runner. Exit status reaches Task Scheduler.
+`scheduler-status.ps1` resolves the registered physical wrapper location for both
+legacy and windowless entries, so MSIX path redirection cannot hide a merge hold.
+The Windows controller uses Go 1.26.8 at
+`C:\github\tools\upstream\toolchains\go1.26.8\go\bin\go.exe` and the existing
+Codex runtime's pnpm entry through this owner's `pnpm.cmd`, preserving the repo's
+pnpm 10.28.2 selection instead of the global fallback shim's version override or
+deleted Temp dependencies. The portable
+Go archive is pinned by official SHA-256
+`b92c3b2adae85a11ba71fe7216daf0d84e82af4c8ab6c5625807f28622043a59`.
 
 ## Update cycle
 
@@ -43,7 +63,9 @@ Gemini Flash/high; Sonnet remains available for separately admitted bounded revi
 not automatically for this full merge. Optional fresh Claude evidence lives in
 `state/claude-quota-input.json` using Native Review's selection schema with Opus
 only and account alias `local-main`. Missing evidence is unknown, never 100%.
-The helper otherwise reads the independent native Gemini Models pool, including
+Without an explicit Claude observation, the installed HardwarePulse metadata
+reader supplies live Claude quota; Token Monitor is not required. The helper
+also reads the independent native Gemini Models pool, including
 five-hour and weekly windows/reset, and resolves its exact current Flash/high ID.
 All windows must exceed the configured reserve. Input snapshots use unique local
 filenames; the Native Review archive binds the selected route and input digest.

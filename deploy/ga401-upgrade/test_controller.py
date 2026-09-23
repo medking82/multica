@@ -1,5 +1,6 @@
 import hashlib, importlib.util, json, os, subprocess, tempfile, unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT=Path(__file__).parent
 spec=importlib.util.spec_from_file_location("controller", ROOT/"controller.py"); controller=importlib.util.module_from_spec(spec); spec.loader.exec_module(controller)
@@ -48,11 +49,23 @@ class Tests(unittest.TestCase):
                 calls.append(argv); envs.append(kw.get("env", {}))
                 if argv[0] == "git": return P(str(root/".git"))
                 return P("TestInviteOnlySignup PASS\n")
-            controller.full(root, ex)
+            with patch.object(controller, 'GO', root / 'go.exe'), \
+                 patch.object(controller, 'NODE', root / 'node.exe'), \
+                 patch.object(controller, 'PNPM', root / 'pnpm.mjs'), \
+                 patch.object(controller, 'PNPM_SHIM', root / 'pnpm.cmd'):
+                for tool in (controller.GO, controller.NODE, controller.PNPM, controller.PNPM_SHIM):
+                    tool.touch()
+                controller.full(root, ex)
         self.assertTrue(calls)
         go_calls=[(c,e) for c,e in zip(calls,envs) if str(c[0]).endswith("go.exe")]
         self.assertTrue(go_calls)
         self.assertIn("127.0.0.1:13312", go_calls[0][1]["DATABASE_URL"])
+
+    def test_missing_toolchain_reports_clear_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            with patch.object(controller, 'GO', Path(d) / 'missing-go.exe'):
+                with self.assertRaisesRegex(controller.Failure, 'toolchain missing'):
+                    controller.test_env()
 
     def test_missing_custom_gate_fails_closed(self):
         with tempfile.TemporaryDirectory() as d:

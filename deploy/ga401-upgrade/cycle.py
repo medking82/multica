@@ -20,7 +20,7 @@ import uuid
 
 from discover import discover
 
-REPO = Path(r'C:\github\multica-ga401-upgrade-0439')
+REPO = Path(r'C:\github\tools\upstream\multica-ga401')
 BRANCH = 'codex/ga401-upgrade-0439'
 REMOTE = 'https://github.com/multica-ai/multica.git'
 SKILLS = Path(r'C:\Users\Marck\.agents\skills')
@@ -164,10 +164,12 @@ class Cycle:
         quota_input = self.root / ('review-quota-' + uuid.uuid4().hex + '.json')
         preparation = [sys.executable, '-B', str(SKILLS / 'native-review/scripts/prepare-quota.py'),
             '--task', 'Review a complete Multica upstream merge for GA401 compatibility, migrations and custom feature preservation',
-            '--allow-gemini', '--output', str(quota_input)]
+            '--allow-gemini', '--gemini-source', 'native', '--output', str(quota_input)]
         claude_input = self.root / 'claude-quota-input.json'
         if claude_input.exists() or claude_input.is_symlink():
             preparation.extend(['--claude-input', str(claude_input)])
+        else:
+            preparation.extend(['--claude-source', 'hardware-pulse'])
         # A full upstream merge is not automatically admitted to a smaller reviewer.
         prepared = json.loads(self.command(preparation, timeout=120))
         require(prepared.get('status') == 'selected' and prepared.get('input') == str(quota_input),
