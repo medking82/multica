@@ -65,7 +65,6 @@ vi.mock("../../editor", async () => ({
     "../../editor/use-composer-submit",
   )),
   useEditorUpload: () => ({ uploadWithToast, upload: vi.fn(), uploading: false }),
-  VoiceInputButton: () => null,
   useFileDropZone: () => ({ isDragOver: false, dropZoneProps: {} }),
   FileDropOverlay: () => null,
   ReadonlyContent: ({ content }: { content: string }) => <div>{content}</div>,

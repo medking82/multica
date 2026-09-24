@@ -141,6 +141,50 @@ func TestAgentRuntimeLookupBatchClaimIsAttributed(t *testing.T) {
 	}
 }
 
+// Usage reports from older daemons omit provider. Backfill it once per report
+// and attribute that read to task processing, even when multiple models appear.
+func TestAgentRuntimeLookupTaskUsageIsAttributed(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	m := withTestMetrics(t)
+	runtimeID := dbfx.Runtime(t, "Usage lookup attribution", testutil.Cols{"provider": "codex"})
+	agentID := dbfx.Agent(t, "Usage lookup attribution", runtimeID)
+	issueID := dbfx.Issue(t, "Usage lookup attribution")
+	taskID := dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "issue_id": issueID})
+
+	before := lookupSnapshot(t, m)
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/usage",
+		map[string]any{"usage": []TaskUsagePayload{
+			{Model: "model-a", InputTokens: 11},
+			{Model: "model-b", InputTokens: 17},
+		}}, testWorkspaceID, "usage-lookup-daemon")
+	testutil.Call(t, testHandler.ReportTaskUsage, withURLParam(req, "taskId", taskID)).Want(http.StatusOK)
+
+	var rows, inputTokens int64
+	dbfx.QueryRow(t, `SELECT count(*), COALESCE(sum(input_tokens), 0)
+		FROM task_usage WHERE task_id = $1 AND provider = 'codex'`, taskID).Scan(&rows, &inputTokens)
+	if rows != 2 || inputTokens != 28 {
+		t.Fatalf("stored usage = %d rows, %d input tokens; want 2 rows, 28 tokens with codex provider", rows, inputTokens)
+	}
+
+	after := lookupSnapshot(t, m)
+	for _, want := range []struct {
+		source string
+		delta  float64
+	}{
+		{obsmetrics.RuntimeLookupSourceTask, 1},
+		{obsmetrics.RuntimeLookupSourceDaemonAPI, 0},
+		{obsmetrics.RuntimeLookupSourceOther, 0},
+	} {
+		key := want.source + "/" + obsmetrics.RuntimeLookupResultOK
+		if got := after[key] - before[key]; got != want.delta {
+			t.Errorf("%s delta = %v, want %v", key, got, want.delta)
+		}
+	}
+}
+
 // ---- helpers --------------------------------------------------------------
 
 // withTestMetrics installs a fresh collector on the shared test handler for the

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -66,6 +67,48 @@ func TestClient_ClaimTasks_PostsRuntimeSetAndParsesTasks(t *testing.T) {
 	}
 	if tasks[1].ID != "t2" || tasks[1].RuntimeID != "rt-b" {
 		t.Errorf("task[1] = %+v, want id=t2 runtime_id=rt-b", tasks[1])
+	}
+}
+
+func TestClient_ClaimTasks_LegacyActiveSiblingRunsDoesNotChangeTasks(t *testing.T) {
+	decodeTasks := func(response string) []*Task {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(response))
+		}))
+		defer srv.Close()
+
+		c := NewClient(srv.URL)
+		c.SetToken("tok")
+		tasks, err := c.ClaimTasks(context.Background(), "daemon-x", []string{"rt-a", "rt-b"}, 2)
+		if err != nil {
+			t.Fatalf("ClaimTasks: %v", err)
+		}
+		return tasks
+	}
+
+	const commonTasks = `
+		{"id":"t1","runtime_id":"rt-a","issue_identifier":"MUL-101","agent":{"name":"a"}},
+		{"id":"t2","runtime_id":"rt-b","issue_identifier":"MUL-202","agent":{"name":"b"}}
+	`
+	legacyTasks := decodeTasks(`{"tasks":[
+		{"id":"t1","runtime_id":"rt-a","issue_identifier":"MUL-101","agent":{"name":"a"},"active_sibling_runs":[{"task_id":"sibling-1","issue_identifier":"MUL-101","status":"running"}]},
+		{"id":"t2","runtime_id":"rt-b","issue_identifier":"MUL-202","agent":{"name":"b"},"active_sibling_runs":[]}
+	]}`)
+	currentTasks := decodeTasks(`{"tasks":[` + commonTasks + `]}`)
+
+	if !reflect.DeepEqual(legacyTasks, currentTasks) {
+		t.Fatalf("legacy and current ClaimTasks responses decoded differently:\nlegacy:  %#v\ncurrent: %#v", legacyTasks, currentTasks)
+	}
+	if len(currentTasks) != 2 {
+		t.Fatalf("got %d tasks, want 2", len(currentTasks))
+	}
+	if currentTasks[0].ID != "t1" || currentTasks[0].RuntimeID != "rt-a" || currentTasks[0].IssueIdentifier != "MUL-101" || currentTasks[0].Agent == nil || currentTasks[0].Agent.Name != "a" {
+		t.Errorf("task[0] = %+v, want id=t1 runtime_id=rt-a issue_identifier=MUL-101 agent=a", currentTasks[0])
+	}
+	if currentTasks[1].ID != "t2" || currentTasks[1].RuntimeID != "rt-b" || currentTasks[1].IssueIdentifier != "MUL-202" || currentTasks[1].Agent == nil || currentTasks[1].Agent.Name != "b" {
+		t.Errorf("task[1] = %+v, want id=t2 runtime_id=rt-b issue_identifier=MUL-202 agent=b", currentTasks[1])
 	}
 }
 

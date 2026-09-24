@@ -1202,25 +1202,18 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// HandleDaemonWSHeartbeat is the daemonws.HeartbeatHandler entry point: it
-// resolves the runtime, verifies the connection's workspace owns it, and
-// returns the ack payload. It is the WebSocket-side mirror of DaemonHeartbeat.
-//
-// Workspace authorization is re-checked on every heartbeat instead of trusted
-// from the upgrade-time check because runtime ownership can change (e.g. a
-// runtime is reassigned to another workspace mid-connection).
-//
-// When the runtime row is missing (pgx.ErrNoRows), the function returns a
-// successful ack with Status=HeartbeatStatusRuntimeGone and RuntimeGone=true
-// instead of an error. That keeps the hub from logging every beat at Warn,
-// and tells the daemon to drop the stale runtime and re-register. Other DB
-// errors still propagate as errors so they keep their existing Warn logging
-// and the daemon does not mistake a hiccup for a deletion.
+// HandleDaemonWSHeartbeat is the daemonws.HeartbeatHandler entry point. The
+// WebSocket upgrade already batch-authenticated the fixed runtime set and
+// captured each runtime's liveness state in a connection lease, so the hot
+// path never reads agent_runtime. HTTP heartbeat remains the stateless lookup
+// fallback for a daemon that stops receiving WebSocket acknowledgements.
 func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws.ClientIdentity, runtimeID string, supportsBatchImport bool) (*protocol.DaemonHeartbeatAckPayload, error) {
 	lease := identity.RuntimeLeases[runtimeID]
 	if lease == nil {
 		return nil, fmt.Errorf("runtime not in connection lease")
 	}
+	// Defensive consistency assertion only: the workspace scope and lease came
+	// from the same connection-time query. This does not re-authorize against DB.
 	if !identity.AllowsWorkspace(lease.Snapshot().WorkspaceID) {
 		return nil, fmt.Errorf("runtime not in connection workspace")
 	}
@@ -1240,7 +1233,9 @@ func (h *Handler) HandleDaemonWSHeartbeat(ctx context.Context, identity daemonws
 
 func runtimeGoneHeartbeatAck(runtimeID string) *protocol.DaemonHeartbeatAckPayload {
 	return &protocol.DaemonHeartbeatAckPayload{
-		RuntimeID: runtimeID, Status: protocol.HeartbeatStatusRuntimeGone, RuntimeGone: true,
+		RuntimeID:   runtimeID,
+		Status:      protocol.HeartbeatStatusRuntimeGone,
+		RuntimeGone: true,
 	}
 }
 
@@ -1364,14 +1359,14 @@ func (h *Handler) recordHeartbeatState(
 // heartbeatMetrics carries per-stage timings out of processHeartbeat so the
 // HTTP slow-log can stay structured. The WS path discards them.
 type heartbeatMetrics struct {
-	UpdateMs, ProbeModelMs, PopModelMs, ProbeSkillsMs, PopSkillsMs, ProbeImportMs, PopImportMs int64
-	ProbeModelTimedOut, ProbeSkillsTimedOut, ProbeImportTimedOut                               bool
+	ProbeModelMs, PopModelMs, ProbeSkillsMs, PopSkillsMs, ProbeImportMs, PopImportMs int64
+	ProbeModelTimedOut, ProbeSkillsTimedOut, ProbeImportTimedOut                     bool
 }
 
-// processHeartbeat does the work shared by HTTP POST /api/daemon/heartbeat and
-// the WebSocket daemon:heartbeat path: pulls pending actions queued for the
-// runtime. Auth, request decoding and liveness recording live in the caller
-// because they differ between transports.
+// processHeartbeat pulls pending actions for both HTTP and WebSocket
+// heartbeats using only the runtime ID. Each transport records liveness first:
+// HTTP uses its stateless runtime row, while WebSocket uses the connection
+// lease. Auth and request decoding also remain transport-specific.
 func (h *Handler) processHeartbeat(ctx context.Context, runtimeID string, supportsBatchImport bool) (*protocol.DaemonHeartbeatAckPayload, heartbeatMetrics, error) {
 	var m heartbeatMetrics
 
@@ -3399,10 +3394,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		projectCtx.applyTo(&resp)
 	}
 
-	// Handoff note (MUL-3375) is populated by taskToResponse (the shared mapper
-	// resp came from above), so the daemon's prompt + issue_context.md render the
-	// assignment-handoff branch. Empty for all other task kinds.
-
 	// Quick-create task: no issue / chat / autopilot link — workspace and
 	// prompt come from the task's context JSONB. Resolve workspace from
 	// there so the isolation check below has something to compare.
@@ -3571,37 +3562,6 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	)
 	if skillFailure != nil {
 		return resp, deliveredCommentIDs, issueSnapshot, agentSkillCount, builtinSkillCount, skillFailure
-	}
-
-	// Surface a bounded snapshot of the same agent's other in-flight issue
-	// tasks. Queued tasks cannot coordinate yet and are intentionally omitted.
-	// This is advisory context, not a queue gate: cross-issue parallelism and
-	// serial handoffs remain valid, while the prompt can stop an unaware second
-	// run from opening a duplicate PR. Scope the query to the already-validated
-	// runtime workspace so corrupt cross-tenant task links never leak.
-	if siblings, err := h.Queries.ListActiveSiblingIssueTasks(r.Context(), db.ListActiveSiblingIssueTasksParams{
-		AgentID:     task.AgentID,
-		TaskID:      task.ID,
-		WorkspaceID: parseUUID(resp.WorkspaceID),
-	}); err == nil {
-		resp.ActiveSiblingRuns = make([]ActiveSiblingRunData, 0, len(siblings))
-		for _, sibling := range siblings {
-			resp.ActiveSiblingRuns = append(resp.ActiveSiblingRuns, ActiveSiblingRunData{
-				TaskID:          uuidToString(sibling.TaskID),
-				IssueID:         uuidToString(sibling.IssueID),
-				IssueIdentifier: fmt.Sprintf("%s-%d", sibling.IssuePrefix, sibling.IssueNumber),
-				IssueTitle:      sibling.IssueTitle,
-				Status:          sibling.Status,
-				CreatedAt:       timestampToString(sibling.CreatedAt),
-				StartedAt:       timestampToString(sibling.StartedAt),
-			})
-		}
-	} else {
-		slog.Warn("task claim: failed to load active sibling runs",
-			"task_id", uuidToString(task.ID),
-			"agent_id", uuidToString(task.AgentID),
-			"error", err,
-		)
 	}
 
 	// Workspace-level Context (workspace.context DB column) — the per-workspace
@@ -4986,7 +4946,7 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 		provider := normalizeProvider(u.Provider)
 		if provider == "" {
 			if !runtimeProviderLoaded {
-				if rt, err := h.getAgentRuntime(r.Context(), obsmetrics.RuntimeLookupSourceDaemonAPI, task.RuntimeID); err == nil {
+				if rt, err := h.getAgentRuntime(r.Context(), obsmetrics.RuntimeLookupSourceTask, task.RuntimeID); err == nil {
 					runtimeProvider = normalizeProvider(rt.Provider)
 				} else {
 					slog.Warn("load runtime provider for usage backfill failed",
@@ -5599,9 +5559,43 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// familyActiveRunCap bounds a scope=family read.
+//
+// It is a response-size budget set to the shape of the normal case — a handful
+// of runs in flight at once (maintainer call, MUL-6846) — NOT a bound derived
+// from how much work can really be in flight. A family can legitimately exceed
+// it by a lot: a single agent may be configured up to
+// agentconfig.MaxMaxConcurrentTasks (50) on its own, this feature exists
+// precisely for the case where SEVERAL agents work a family at once, and the
+// returned set includes queued / dispatched / waiting_local_directory rows,
+// which no execution-slot limit bounds at all — a parent that fans out 200
+// children can have 200 of them enqueued.
+//
+// So truncation here is an ordinary outcome, not a pathological one, and that
+// is exactly why it must be reported. A cap that truncated silently would be
+// worse than no cap: "I saw no run on that sibling" and "the answer was cut
+// off" would look identical, and an agent would read the second as the first.
+// The handler asks for one row more than it will return and sets
+// HeaderActiveRunsTruncated when that extra row comes back. The query orders
+// running-first, so what the budget drops is the least decision-relevant.
 const familyActiveRunCap = 20
+
+// HeaderActiveRunsTruncated tells a caller its coordination read hit
+// familyActiveRunCap and is therefore an incomplete picture of who is working
+// in this family. Same shape and convention as HeaderTimelineTruncated: the
+// signal rides a header because the response body is a bare array that existing
+// callers parse positionally.
 const HeaderActiveRunsTruncated = "X-Active-Runs-Truncated"
 
+// ActiveRunSummary is one in-flight run as the coordination read reports it:
+// which issue, which agent, what state, since when, and the task id to follow
+// up with `multica issue run-messages`.
+//
+// Deliberately NOT AgentTaskResponse. That type is the execution log's row —
+// result, work_dir, attribution, coalesced comment ids — and it costs roughly
+// 5x the bytes of this one. A caller asking "is anyone working next to me?"
+// reads none of those fields, and it is an agent spending its own context on
+// the answer, so the payload is cut to what the question needs.
 type ActiveRunSummary struct {
 	TaskID          string  `json:"task_id"`
 	IssueID         string  `json:"issue_id"`
@@ -5613,7 +5607,21 @@ type ActiveRunSummary struct {
 	StartedAt       *string `json:"started_at,omitempty"`
 }
 
-// ListTasksByIssue returns all tasks (any status) for an issue — used for execution history.
+// ListTasksByIssue returns tasks for an issue — the execution history behind
+// the issue-detail sidebar, and the coordination reads behind
+// `multica issue runs --active` / `--siblings`.
+//
+// Two optional query params narrow or widen it; with neither, the response is
+// byte-identical to what it has always been (full history, newest first), which
+// is what the UI and the CLI's short-task-ID resolver both depend on:
+//
+//   - active=true — restrict to in-flight statuses, the same set the
+//     issue-detail "agent live" banner calls active.
+//   - scope=family — widen from this issue to its sub-issue family: the
+//     issue's parent (or the issue itself, when it has no parent) plus every
+//     child of that parent. Implies active=true, because a full execution
+//     history across a whole family is unbounded and answers no question anyone
+//     asked.
 func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "id")
 	issue, ok := h.loadIssueForUser(w, r, issueID)
@@ -5626,6 +5634,11 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "scope must be 'issue' or 'family'")
 		return
 	}
+	// Parse rather than compare. `active=tru` answering with the full history
+	// under a 200 is the same silent-downgrade failure the unknown-scope check
+	// above rejects: the caller asked who is here NOW and would be handed every
+	// run that ever finished, which reads as "nobody is here" only after it has
+	// paid for the whole log. Same shape as the comment-list boolean params.
 	activeOnly := false
 	if activeStr := r.URL.Query().Get("active"); activeStr != "" {
 		switch activeStr {
@@ -5639,11 +5652,18 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := uuidToString(issue.WorkspaceID)
+
 	if scope == "family" {
+		// Root the family at the parent when there is one, so a child sees its
+		// siblings; at the issue itself otherwise, so a parent sees its children
+		// and a standalone issue degenerates to its own active runs. One rule,
+		// both directions.
 		root := issue.ID
 		if issue.ParentIssueID.Valid {
 			root = issue.ParentIssueID
 		}
+		// One row beyond the cap, so a full page can be told apart from a
+		// truncated one without a second count query.
 		rows, err := h.Queries.ListActiveTasksByIssueFamily(r.Context(), db.ListActiveTasksByIssueFamilyParams{
 			WorkspaceID: issue.WorkspaceID,
 			RootIssueID: root,
@@ -5660,12 +5680,21 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 		summaries := make([]ActiveRunSummary, len(rows))
 		for i, row := range rows {
 			summaries[i] = ActiveRunSummary{
-				TaskID: uuidToString(row.TaskID), IssueID: uuidToString(row.IssueID),
+				TaskID:  uuidToString(row.TaskID),
+				IssueID: uuidToString(row.IssueID),
+				// Rows span several issues here, so each one has to carry the
+				// issue it belongs to — a caller cannot label it from the task.
 				IssueIdentifier: service.IssueIdentifier(row.IssuePrefix, row.IssueNumber),
-				IssueTitle:      row.IssueTitle, AgentID: uuidToString(row.AgentID), Status: row.Status,
-				CreatedAt: timestampToString(row.CreatedAt), StartedAt: timestampToPtr(row.StartedAt),
+				IssueTitle:      row.IssueTitle,
+				AgentID:         uuidToString(row.AgentID),
+				Status:          row.Status,
+				CreatedAt:       timestampToString(row.CreatedAt),
+				StartedAt:       timestampToPtr(row.StartedAt),
 			}
 		}
+		// No attribution hydration either: it was the single largest field on
+		// the old payload and needed its own query, and "on behalf of whom" is
+		// an execution-log question, not a coordination one.
 		writeJSON(w, http.StatusOK, summaries)
 		return
 	}
@@ -5692,6 +5721,11 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	// issue-facing surface must resolve initiator/originator names (departed-safe,
 	// one batch) — otherwise the badge falls back to "someone" on issue detail.
 	h.hydrateTaskAttributions(r.Context(), attributionsOf(resp))
+	// Usage belongs to the execution log, not to a coordination read.
+	// ListIssueTaskUsage returns a row per (task, provider, model) for EVERY
+	// task the issue ever ran, so hydrating it on the active path would keep
+	// paying the full-history cost this filter exists to remove — and pay it
+	// for a column that is near-empty on runs that have not finished.
 	if !activeOnly {
 		h.hydrateTaskUsage(r.Context(), issue.ID, resp)
 	}

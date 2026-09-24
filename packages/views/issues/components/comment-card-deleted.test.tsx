@@ -44,7 +44,6 @@ vi.mock("../../editor", async () => ({
   useEditorUpload: () => ({ uploadWithToast: vi.fn(), upload: vi.fn(), uploading: false }),
   useFileDropZone: () => ({ isDragOver: false, dropZoneProps: {} }),
   FileDropOverlay: () => null,
-  VoiceInputButton: () => null,
   ReadonlyContent: ({ content }: { content: string }) => <div>{content}</div>,
   Attachment: () => null,
   AttachmentDownloadProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
