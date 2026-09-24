@@ -2,10 +2,10 @@ package handler
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -13,124 +13,208 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func inviteOnlyHandler() *Handler {
+func signupInvitation(t *testing.T, email string) string {
+	t.Helper()
+	dbfx.Cleanup(t, "DELETE FROM workspace_invitation WHERE invitee_email = $1", email)
+	return dbfx.Insert(t, "workspace_invitation", testutil.Cols{
+		"workspace_id":  parseUUID(testWorkspaceID),
+		"inviter_id":    parseUUID(testUserID),
+		"invitee_email": email,
+		"role":          "member",
+		"status":        "pending",
+		"expires_at":    testutil.Raw("now() + interval '1 hour'"),
+	})
+}
+
+func restrictSignupHandler(t *testing.T) *Handler {
+	t.Helper()
+	// Keep email delivery local even when the developer has configured a provider.
+	t.Setenv("RESEND_API_KEY", "")
+	t.Setenv("SMTP_HOST", "")
 	h := *testHandler
-	h.cfg.AllowSignup = false
-	h.cfg.AllowedEmails = []string{"allowlisted@example.invalid"}
-	h.cfg.AllowedEmailDomains = nil
-	// No provider or SMTP transport: these tests must never send real email.
-	h.EmailService = &service.EmailService{}
+	h.cfg = Config{AllowSignup: false}
+	h.EmailService = service.NewEmailService()
 	return &h
 }
 
-func TestInviteOnlySignup(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-	for _, tc := range []struct {
-		name, status        string
-		duration            time.Duration
-		wrongEmail, allowed bool
-	}{
-		{"pending", "pending", time.Hour, false, true},
-		{"missing", "", time.Hour, false, false},
-		{"expired", "pending", -time.Hour, false, false},
-		{"accepted", "accepted", time.Hour, false, false},
-		{"declined", "declined", time.Hour, false, false},
-		{"different_email", "pending", time.Hour, true, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h := inviteOnlyHandler()
-			email := "invite-only-" + tc.name + "@example.invalid"
-			dbfx.Cleanup(t, `DELETE FROM "user" WHERE email = $1`, email)
-			dbfx.Cleanup(t, "DELETE FROM verification_code WHERE email = $1", email)
-			if tc.status != "" {
-				inviteEmail := email
-				if tc.wrongEmail {
-					inviteEmail = "other-" + email
-				}
-				dbfx.Insert(t, "workspace_invitation", testutil.Cols{
-					"workspace_id": testWorkspaceID, "inviter_id": testUserID,
-					"invitee_email": inviteEmail, "role": "member", "status": tc.status,
-					"expires_at": time.Now().Add(tc.duration),
-				})
+func changeSignupInvitation(t *testing.T, id, state string) {
+	t.Helper()
+	switch state {
+	case "pending":
+	case "revoked":
+		if _, err := testHandler.Queries.RevokeInvitation(context.Background(), parseUUID(id)); err != nil {
+			t.Fatal(err)
+		}
+	case "expired":
+		// Leave status pending to exercise expiry without relying on cleanup jobs.
+		dbfx.Exec(t, `UPDATE workspace_invitation SET expires_at = now() - interval '1 hour' WHERE id = $1`, id)
+	default:
+		dbfx.Exec(t, `UPDATE workspace_invitation SET status = $2 WHERE id = $1`, id, state)
+	}
+}
+
+func TestSendCodeInvitationSignupGate(t *testing.T) {
+	for _, state := range []string{"pending", "expired", "accepted", "declined", "revoked", "missing"} {
+		t.Run(state, func(t *testing.T) {
+			email := "invite-signup-" + state + "@example.com"
+			if state != "missing" {
+				id := signupInvitation(t, email)
+				changeSignupInvitation(t, id, state)
 			}
+			dbfx.Cleanup(t, `DELETE FROM verification_code WHERE email = $1`, email)
+			h := restrictSignupHandler(t)
 			want := http.StatusForbidden
-			if tc.allowed {
+			if state == "pending" {
 				want = http.StatusOK
 			}
-			testutil.Call(t, h.SendCode, newRequest("POST", "/auth/send-code", SendCodeRequest{Email: email})).Want(want)
-			if tc.allowed {
-				code, err := h.Queries.GetLatestVerificationCode(context.Background(), email)
-				if err != nil {
-					t.Fatal(err)
-				}
-				wrong := "000000"
-				if wrong == code.Code {
-					wrong = "111111"
-				}
-				testutil.Call(t, h.VerifyCode, newRequest("POST", "/auth/verify-code", VerifyCodeRequest{Email: email, Code: wrong})).Want(http.StatusBadRequest)
-				if n := dbfx.Count(t, `SELECT count(*) FROM "user" WHERE email = $1`, email); n != 0 {
-					t.Fatal("wrong code created an account")
-				}
-				testutil.Call(t, h.VerifyCode, newRequest("POST", "/auth/verify-code", VerifyCodeRequest{Email: email, Code: code.Code})).Want(http.StatusOK)
-				user, err := h.Queries.GetUserByEmail(context.Background(), email)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if n := dbfx.Count(t, "SELECT count(*) FROM member WHERE user_id = $1", user.ID); n != 0 {
-					t.Fatal("signup must not automatically grant membership")
-				}
-			} else {
-				// Even a valid previously issued code cannot bypass invitation eligibility.
-				dbfx.Insert(t, "verification_code", testutil.Cols{"email": email, "code": "314159", "expires_at": time.Now().Add(time.Hour)})
-				testutil.Call(t, h.VerifyCode, newRequest("POST", "/auth/verify-code", VerifyCodeRequest{Email: email, Code: "314159"})).Want(http.StatusForbidden)
-				if n := dbfx.Count(t, `SELECT count(*) FROM "user" WHERE email = $1`, email); n != 0 {
-					t.Fatal("ineligible signup created an account")
-				}
-			}
+			req := testutil.JSONRequest(http.MethodPost, "/auth/send-code", map[string]string{"email": " " + strings.ToUpper(email) + " "})
+			testutil.Call(t, h.SendCode, req).Want(want)
 		})
 	}
 }
 
-func TestInviteOnlySignupRechecksInvitation(t *testing.T) {
-	for _, action := range []string{"revoke", "expire"} {
-		t.Run(action, func(t *testing.T) {
-			h := inviteOnlyHandler()
-			email := "invite-only-recheck-" + action + "@example.invalid"
+func TestVerifyCodeRechecksSignupInvitation(t *testing.T) {
+	for _, state := range []string{"pending", "expired", "revoked", "declined", "accepted"} {
+		t.Run(state, func(t *testing.T) {
+			email := "invite-recheck-" + state + "@example.com"
+			id := signupInvitation(t, email)
 			dbfx.Cleanup(t, `DELETE FROM "user" WHERE email = $1`, email)
-			dbfx.Cleanup(t, "DELETE FROM verification_code WHERE email = $1", email)
-			id := dbfx.Insert(t, "workspace_invitation", testutil.Cols{
-				"workspace_id": testWorkspaceID, "inviter_id": testUserID, "invitee_email": email,
-				"role": "member", "status": "pending", "expires_at": time.Now().Add(time.Hour),
-			})
-			testutil.Call(t, h.SendCode, newRequest("POST", "/auth/send-code", SendCodeRequest{Email: email})).Want(http.StatusOK)
+			dbfx.Cleanup(t, `DELETE FROM verification_code WHERE email = $1`, email)
+			h := restrictSignupHandler(t)
+			testutil.Call(t, h.SendCode, testutil.JSONRequest(http.MethodPost, "/auth/send-code", map[string]string{"email": email})).Want(http.StatusOK)
 			code, err := h.Queries.GetLatestVerificationCode(context.Background(), email)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if action == "revoke" {
-				dbfx.Exec(t, "DELETE FROM workspace_invitation WHERE id = $1", id)
-			} else {
-				dbfx.Exec(t, "UPDATE workspace_invitation SET expires_at = now() - interval '1 hour' WHERE id = $1", id)
+			if state == "pending" {
+				wrong := "000000"
+				if wrong == code.Code {
+					wrong = "111111"
+				}
+				testutil.Call(t, h.VerifyCode, testutil.JSONRequest(http.MethodPost, "/auth/verify-code", map[string]string{"email": email, "code": wrong})).Want(http.StatusBadRequest)
+				if count := dbfx.Count(t, `SELECT count(*) FROM "user" WHERE email = $1`, email); count != 0 {
+					t.Fatal("wrong verification code created an account")
+				}
 			}
-			testutil.Call(t, h.VerifyCode, newRequest("POST", "/auth/verify-code", VerifyCodeRequest{Email: email, Code: code.Code})).Want(http.StatusForbidden)
-			if n := dbfx.Count(t, `SELECT count(*) FROM "user" WHERE email = $1`, email); n != 0 {
-				t.Fatal("withdrawn invitation created an account")
+			changeSignupInvitation(t, id, state)
+			want := http.StatusForbidden
+			if state == "pending" {
+				want = http.StatusOK
+			}
+			resp := testutil.Call(t, h.VerifyCode, testutil.JSONRequest(http.MethodPost, "/auth/verify-code", map[string]string{"email": email, "code": code.Code})).Want(want)
+			count := dbfx.Count(t, `SELECT count(*) FROM "user" WHERE email = $1`, email)
+			if state != "pending" {
+				if count != 0 || len(resp.Result().Cookies()) != 0 {
+					t.Fatal("invalidated invitation created an account or authenticated session")
+				}
+				return
+			}
+			if count != 1 {
+				t.Fatalf("expected one new account, got %d", count)
+			}
+			if n := dbfx.Count(t, `SELECT count(*) FROM member WHERE user_id = (SELECT id FROM "user" WHERE email = $1)`, email); n != 0 {
+				t.Fatal("signup must not accept the invitation or grant workspace membership")
+			}
+			changeSignupInvitation(t, id, "revoked")
+			_, isNew, err := h.findOrCreateUser(context.Background(), email)
+			if err != nil || isNew {
+				t.Fatalf("revocation must not block the existing account: isNew=%t, err=%v", isNew, err)
 			}
 		})
 	}
 }
 
-type invitationQueryFailure struct{ mockDB }
-
-func (*invitationQueryFailure) Query(context.Context, string, ...any) (pgx.Rows, error) {
-	return nil, errors.New("invitation database unavailable")
+func TestGoogleLoginInvitationSignup(t *testing.T) {
+	t.Setenv("GOOGLE_CLIENT_ID", "test-client")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+	for _, invited := range []bool{false, true} {
+		t.Run(fmt.Sprintf("invited=%t", invited), func(t *testing.T) {
+			email := fmt.Sprintf("google-invited-%t@other.com", invited)
+			if invited {
+				signupInvitation(t, email)
+			}
+			dbfx.Cleanup(t, `DELETE FROM "user" WHERE email = $1`, email)
+			h := *testHandler
+			h.cfg = Config{AllowSignup: true, AllowedEmailDomains: []string{"company.com"}}
+			h.googleOAuthHTTPClient = &http.Client{Transport: googleRoundTripper(func(req *http.Request) (*http.Response, error) {
+				switch req.URL.Host {
+				case "oauth2.googleapis.com":
+					return googleResponse(req, http.StatusOK, `{"access_token":"test-token"}`), nil
+				case "www.googleapis.com":
+					return googleResponse(req, http.StatusOK, fmt.Sprintf(`{"email":%q}`, " "+strings.ToUpper(email)+" ")), nil
+				default:
+					t.Fatalf("unexpected Google request: %s", req.URL)
+					return nil, nil
+				}
+			})}
+			want := http.StatusForbidden
+			if invited {
+				want = http.StatusOK
+			}
+			resp := testutil.Call(t, h.GoogleLogin, testutil.JSONRequest(http.MethodPost, "/auth/google", map[string]string{"code": "test-code", "redirect_uri": "http://localhost/auth/callback"})).Want(want)
+			if invited {
+				var login LoginResponse
+				resp.JSON(&login)
+				if login.Token == "" || login.User.Email != email {
+					t.Fatalf("expected authenticated invited account, got %+v", login.User)
+				}
+			} else if len(resp.Result().Cookies()) != 0 || dbfx.Count(t, `SELECT count(*) FROM "user" WHERE email = $1`, email) != 0 {
+				t.Fatal("uninvited user must not get an account or session")
+			}
+		})
+	}
 }
 
-func TestInviteOnlySignupQueryFailure(t *testing.T) {
-	h := inviteOnlyHandler()
-	h.Queries = db.New(&invitationQueryFailure{mockDB{getUserErr: pgx.ErrNoRows}})
-	testutil.Call(t, h.SendCode, newRequest("POST", "/auth/send-code", SendCodeRequest{Email: "new@example.invalid"})).Want(http.StatusInternalServerError)
-	if _, _, err := h.findOrCreateUser(context.Background(), "new@example.invalid"); err == nil {
-		t.Fatal("invitation lookup failure must fail closed")
+// Delegate every real query except the failing invitation lookup. This pins
+// HTTP error handling and proves no account or session is created on failure.
+type failingSignupInvitationDB struct{ db.DBTX }
+
+func (m failingSignupInvitationDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+	if strings.HasPrefix(sql, "-- name: HasPendingInvitationForEmail :one\n") {
+		return &mockRow{err: context.Canceled}
+	}
+	return m.DBTX.QueryRow(ctx, sql, args...)
+}
+
+func TestSignupInvitationLookupFailure(t *testing.T) {
+	t.Setenv("GOOGLE_CLIENT_ID", "test-client")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+	for _, path := range []string{"send-code", "verify-code", "google"} {
+		t.Run(path, func(t *testing.T) {
+			email := "invite-lookup-error-" + path + "@example.com"
+			signupInvitation(t, email)
+			h := *testHandler
+			h.cfg = Config{AllowSignup: false}
+			h.Queries = db.New(failingSignupInvitationDB{testPool})
+			handler := h.SendCode
+			body := map[string]string{"email": email}
+			switch path {
+			case "verify-code":
+				handler = h.VerifyCode
+				body["code"] = "123456"
+				dbfx.Insert(t, "verification_code", testutil.Cols{
+					"email": email, "code": body["code"], "expires_at": testutil.Raw("now() + interval '10 minutes'"),
+				})
+			case "google":
+				handler = h.GoogleLogin
+				body = map[string]string{"code": "test-code", "redirect_uri": "http://localhost/auth/callback"}
+				h.googleOAuthHTTPClient = &http.Client{Transport: googleRoundTripper(func(req *http.Request) (*http.Response, error) {
+					switch req.URL.Host {
+					case "oauth2.googleapis.com":
+						return googleResponse(req, http.StatusOK, `{"access_token":"test-token"}`), nil
+					case "www.googleapis.com":
+						return googleResponse(req, http.StatusOK, fmt.Sprintf(`{"email":%q}`, email)), nil
+					default:
+						t.Fatalf("unexpected Google request: %s", req.URL)
+						return nil, nil
+					}
+				})}
+			}
+			dbfx.Cleanup(t, `DELETE FROM "user" WHERE email = $1`, email)
+			resp := testutil.Call(t, handler, testutil.JSONRequest(http.MethodPost, "/auth/"+path, body)).Want(http.StatusInternalServerError)
+			if len(resp.Result().Cookies()) != 0 || dbfx.Count(t, `SELECT count(*) FROM "user" WHERE email = $1`, email) != 0 {
+				t.Fatal("invitation lookup failure must not create an account or session")
+			}
+		})
 	}
 }
