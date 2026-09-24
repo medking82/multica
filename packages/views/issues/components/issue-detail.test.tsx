@@ -423,6 +423,10 @@ vi.mock("@multica/core/issues/stores", async () => ({
       }),
     },
   ),
+  useTaskSupplementDraftStore: (await import("zustand")).create(() => ({
+    drafts: {}, open: vi.fn(), setContent: vi.fn(), setRequestId: vi.fn(),
+    markEnded: vi.fn(), clear: vi.fn(),
+  })),
   useCommentComposerStore: Object.assign(
     (selector?: any) => {
       const state = { sticky: true, toggleSticky: () => {} };
@@ -452,7 +456,11 @@ const scrollToIndexSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: forwardRef(function MockVirtuoso(
-    { data, itemContent }: { data: unknown[]; itemContent: (i: number, item: unknown) => unknown },
+    { data, itemContent, computeItemKey }: {
+      data: unknown[];
+      itemContent: (i: number, item: unknown) => unknown;
+      computeItemKey: (i: number, item: unknown) => React.Key;
+    },
     ref: any,
   ) {
     useImperativeHandle(ref, () => ({
@@ -465,7 +473,7 @@ vi.mock("react-virtuoso", () => ({
     return (
       <div data-testid="virtuoso-mock">
         {data.map((item, i) => (
-          <div key={i}>{itemContent(i, item) as React.ReactElement}</div>
+          <div key={computeItemKey(i, item)}>{itemContent(i, item) as React.ReactElement}</div>
         ))}
       </div>
     );
@@ -1753,6 +1761,50 @@ describe("IssueDetail (shared)", () => {
     expect(screen.getByText(/changed priority/i)).toBeInTheDocument();
   });
 
+  // Duplicate marks (MUL-7349) name another issue; the identifier is a link
+  // to it, and a mark removed because its original was deleted is plain text.
+  it("links a duplicate mark to the issue it names", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      {
+        type: "activity",
+        id: "act-dup-marked",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "duplicate_marked",
+        details: { original_id: "issue-9", original_identifier: "MUL-9" },
+        created_at: "2026-01-16T00:00:00Z",
+      },
+      {
+        type: "activity",
+        id: "act-dup-unmarked",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "duplicate_unmarked",
+        details: { original_id: "issue-8", original_identifier: "MUL-8", reason: "original_deleted" },
+        created_at: "2026-01-16T00:00:30Z",
+      },
+      {
+        type: "activity",
+        id: "act-dup-reopened",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "duplicate_unmarked",
+        details: { original_id: "issue-9", original_identifier: "MUL-9", to: "todo" },
+        created_at: "2026-01-16T00:01:00Z",
+      },
+    ]);
+    renderIssueDetail();
+
+    const links = await screen.findAllByRole("link", { name: "MUL-9" });
+    expect(links[0]?.getAttribute("href")).toBe("/test/issues/issue-9");
+    expect(screen.getByText(/^marked this issue as a duplicate of/i)).toBeInTheDocument();
+    expect(screen.getByText(/removed the duplicate mark, MUL-8 was deleted/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "MUL-8" })).not.toBeInTheDocument();
+    // Reopening replaces the status row, so the unmarked row says where it went.
+    expect(screen.getByText(/and moved it to Todo/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "MUL-9" })).toHaveLength(2);
+  });
+
   it("renders activity rows with unknown status values without crashing", async () => {
     mockApiObj.listTimeline.mockResolvedValue([
       {
@@ -2926,6 +2978,47 @@ describe("IssueDetail (shared)", () => {
         ),
       );
     });
+  });
+
+  it("keeps the initial assignment block before a later mention and its run (MUL-7632)", async () => {
+    const assignment: AgentTask = {
+      id: "initial-assignment", agent_id: "agent-1", runtime_id: "rt-1", issue_id: "issue-1",
+      kind: "direct", status: "running", priority: 0,
+      created_at: "2026-01-16T00:00:00Z", started_at: "2026-01-16T00:00:00Z",
+      dispatched_at: null, completed_at: null, result: null, error: null, delivered_comment_ids: [],
+    };
+    mockApiObj.listTimeline.mockResolvedValue([]);
+    mockApiObj.listTasksByIssue.mockResolvedValue([assignment]);
+    const client = createTestQueryClient();
+    const { container } = render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <QueryClientProvider client={client}>
+          <IssueDetail issueId="issue-1" defaultSidebarOpen={false} />
+        </QueryClientProvider>
+      </I18nProvider>,
+    );
+    await waitFor(() => expect(container.querySelector('[data-run-slot-id="initial-assignment"]')).not.toBeNull());
+    const initialSlot = container.querySelector('[data-run-slot-id="initial-assignment"]')!;
+    const mention: TimelineEntry = {
+      type: "comment", id: "later-mention", actor_type: "member", actor_id: "user-1",
+      content: "Please handle the other task", parent_id: null, created_at: "2026-01-16T00:01:00Z",
+    };
+    const mentionedRun: AgentTask = {
+      ...assignment, id: "mentioned-run", agent_id: "agent-2", trigger_comment_id: mention.id,
+      created_at: "2026-01-16T00:01:01Z", delivered_comment_ids: [mention.id],
+    };
+    mockApiObj.listTimeline.mockResolvedValue([mention]);
+    mockApiObj.listTasksByIssue.mockResolvedValue([assignment, mentionedRun]);
+    act(() => {
+      client.setQueryData(issueKeys.timeline("issue-1"), [mention]);
+      client.setQueryData(issueKeys.tasks("issue-1"), [assignment, mentionedRun]);
+    });
+    await screen.findByText(mention.content!);
+    await waitFor(() => expect(container.querySelector('[data-run-id="mentioned-run"]')).not.toBeNull());
+    expect(container.querySelector('[data-run-slot-id="initial-assignment"]')).toBe(initialSlot);
+    const mentionBlock = container.querySelector("#comment-later-mention")!;
+    expect(initialSlot.compareDocumentPosition(mentionBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(mentionBlock.querySelector('[data-run-id="mentioned-run"]')).not.toBeNull();
   });
 
   // MUL-7211 regression: a standalone run's published reply belongs at the

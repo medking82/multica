@@ -96,6 +96,20 @@
     "show_source": "Afficher la source",
     "fullscreen": "Plein écran"
   },
+  "desktop": {
+    "dictation": {
+      "toggle": "Dicter avec Codex",
+      "opening": "Ouverture de la dictée Codex…",
+      "sent": "Raccourci {{shortcut}} envoyé à Codex. Terminez dans sa fenêtre de dictée, gardez ce champ sélectionné et relisez le texte avant de l'envoyer.",
+      "not_configured": "Dans l'application de bureau Codex/ChatGPT, définissez « Toggle dictation hotkey » sur Ctrl+Alt+Shift+D. Utilisez un raccourci global unique, et non le raccourci « Start dictation » interne à l'application.",
+      "app_not_running": "Ouvrez l'application Codex/ChatGPT pour Windows et restez connecté, puis réessayez. La CLI Codex seule ne permet pas la dictée globale.",
+      "not_focused": "Gardez cette fenêtre Multica et ce champ actifs, puis réessayez.",
+      "busy": "Relâchez les touches de raccourci enfoncées, patientez un instant et réessayez.",
+      "cleanup_failed": "Certaines touches du raccourci n'ont pas pu être relâchées. Appuyez puis relâchez Ctrl, Alt, Maj et D avant de saisir du texte. Vérifiez l'état de la dictée Codex avant d'utiliser à nouveau le raccourci.",
+      "unavailable": "Impossible d'ouvrir la dictée Codex. Essayez manuellement Ctrl+Alt+Shift+D. Aucun audio n'a été envoyé à une API de transcription Multica.",
+      "editor_not_ready": "L'éditeur n'est pas encore prêt. Réessayez."
+    }
+  },
   "file_card": {
     "uploading": "Envoi de {{filename}}"
   },
