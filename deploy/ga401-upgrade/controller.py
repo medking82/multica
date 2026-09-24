@@ -13,6 +13,11 @@ PNPM = Path(r'C:\Users\Marck\.cache\codex-runtimes\codex-primary-runtime\depende
 PNPM_SHIM = Path(__file__).with_name('pnpm.cmd')
 FIXTURE = 'multica-ga401-upgrade-tests'
 FIXTURE_URL = 'postgres://multica_fixture:multica_fixture_local@127.0.0.1:13312/multica_repair?sslmode=disable'
+AUTH_TESTS = frozenset(('TestSignupGating', 'TestEmailCodeAllowlistErrors',
+    'TestSignupGatingReturnsPendingInvitationLookupError', 'TestFindOrCreateUserGating',
+    'TestSignupInvitationAllowlistInteraction', 'TestSignupSkipsUnnecessaryInvitationLookup',
+    'TestSendCodeInvitationSignupGate', 'TestVerifyCodeRechecksSignupInvitation',
+    'TestGoogleLoginInvitationSignup', 'TestSignupInvitationLookupFailure'))
 
 def test_env():
     if not all(p.is_file() for p in (GO, NODE, PNPM, PNPM_SHIM)): raise Failure('required Windows toolchain missing')
@@ -53,9 +58,36 @@ def common_dir(repo, executor=subprocess.run):
     path = Path(git(repo, "rev-parse", "--git-common-dir", executor=executor))
     return (repo / path).resolve()
 
+
+def transition_template(repo):
+    value = json.loads((repo / 'deploy/ga401-upgrade/transition.json').read_text(encoding='utf-8'))
+    if not isinstance(value, dict): raise Failure('transition must be an object')
+    required = {'prior_commit', 'prior_ledger', 'prior_images', 'target_version', 'upstream_commit'}
+    if set(value) not in (required, required | {'source_commit', 'source_tree'}):
+        raise Failure('transition template fields mismatch')
+    return value
+
+
+def product_repo(repo, executor=subprocess.run):
+    transition = transition_template(repo)
+    if 'source_commit' not in transition:
+        return repo
+    if not all(HEX40.fullmatch(transition.get(key, '')) for key in ('source_commit', 'source_tree')):
+        raise Failure('product source identity must use exact commit and tree')
+    selected = os.environ.get('MULTICA_GA401_PRODUCT_REPO')
+    if not selected: raise Failure('MULTICA_GA401_PRODUCT_REPO must select the pinned product checkout')
+    source = Path(selected).resolve()
+    if git(source, 'rev-parse', 'HEAD', executor=executor) != transition['source_commit']:
+        raise Failure('product checkout source commit mismatch')
+    if git(source, 'rev-parse', 'HEAD^{tree}', executor=executor) != transition['source_tree']:
+        raise Failure('product checkout source tree mismatch')
+    if git(source, 'status', '--porcelain', '--untracked-files=normal', executor=executor):
+        raise Failure('pinned product checkout must be clean')
+    return source
+
 def quick(repo: Path, executor=subprocess.run) -> None:
     print(run([sys.executable, '-B', '-m', 'unittest', 'discover', '-v'], cwd=repo / 'deploy/ga401-upgrade', executor=executor), flush=True)
-    custom_gate(repo, 'quick', executor)
+    custom_gate(product_repo(repo, executor), 'quick', executor)
 
 def fixture_contract(value):
     if value['Config']['Labels'].get('io.hankee.task') != 'ga401-upgrade-0439-tests': raise Failure('fixture owner changed')
@@ -66,6 +98,7 @@ def fixture_contract(value):
     if any(env.get(k) != v for k, v in {'POSTGRES_USER': 'multica_fixture', 'POSTGRES_PASSWORD': 'multica_fixture_local', 'POSTGRES_DB': 'multica_repair'}.items()): raise Failure('fixture identity changed')
 
 def prepare(repo: Path, executor=subprocess.run):
+    repo = product_repo(repo, executor)
     env = test_env()
     common = common_dir(repo, executor) / 'sop'
     expected = digest(repo / 'pnpm-lock.yaml')
@@ -93,9 +126,13 @@ def prepare(repo: Path, executor=subprocess.run):
     run([str(GO), 'run', './cmd/migrate', 'up'], cwd=repo / 'server', env=env, executor=executor)
 
 def full(repo: Path, executor=subprocess.run) -> None:
+    repo = product_repo(repo, executor)
     custom_gate(repo, "full", executor)
-    output = run([str(GO), "test", "./internal/handler", "-run", r"^Test(InviteOnlySignup.*|CheckSignupAllowed.*)$", "-count=1", "-v", "-timeout=5m"], cwd=repo / "server", env=test_env(), executor=executor)
-    if "TestInviteOnlySignup" not in output or "PASS" not in output or re.search(r"(?i)skip|skipping", output):
+    pattern = '^(' + '|'.join(sorted(AUTH_TESTS)) + ')$'
+    output = run([str(GO), "test", "./internal/handler", "-run", pattern, "-count=1", "-json", "-timeout=5m"], cwd=repo / "server", env=test_env(), executor=executor)
+    events = [json.loads(line) for line in output.splitlines() if line.startswith('{')]
+    passed = {e.get('Test') for e in events if e.get('Action') == 'pass'}
+    if not AUTH_TESTS <= passed or any(e.get('Action') in ('skip', 'fail') for e in events):
         raise Failure("full gate did not prove invite-only tests passed without skips")
     common = common_dir(repo, executor)
     (common / "sop").mkdir(parents=True, exist_ok=True)
@@ -123,43 +160,87 @@ def custom_gate(repo: Path, mode: str, executor=subprocess.run) -> None:
 
 def deploy(repo: Path, state_path: Path, env=None, executor=subprocess.run) -> dict:
     commit=_commit(repo, env, executor)
+    source_repo = product_repo(repo, executor)
+    transition = transition_template(repo)
+    source_commit = transition.get('source_commit', commit)
+    source_tree = git(source_repo, 'rev-parse', source_commit + '^{tree}', executor=executor)
+    if not HEX40.fullmatch(source_tree): raise Failure('invalid product source tree')
+    if transition.get('source_tree', source_tree) != source_tree: raise Failure('source tree drift')
+    if git(repo, 'status', '--porcelain', '--untracked-files=normal', executor=executor):
+        raise Failure('deployment owner must be clean after SOP commit')
     common=common_dir(repo, executor)
     archive=common / "sop" / "ga401-upgrade" / f"{commit}.tar"
     archive.parent.mkdir(parents=True, exist_ok=True)
     with archive.open("xb") as out:
-        p=subprocess.Popen(["git", "archive", "--format=tar", "--prefix=source/", commit], cwd=repo, stdout=out, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
+        p=subprocess.Popen(["git", "archive", "--format=tar", "--prefix=source/", source_commit], cwd=source_repo, stdout=out, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
         _, err=p.communicate()
         if p.returncode: raise Failure("git archive failed")
-    archive_sha=digest(archive); root=f"{REMOTE}/{commit}"
+    archive_sha=digest(archive); root=f"{REMOTE}/{source_commit}"
+    # Upload the exact committed blob, independent of checkout CRLF conversion.
+    runner = archive.with_suffix('.upgrade.py')
+    with runner.open('xb') as out:
+        p = subprocess.Popen(['git', 'cat-file', 'blob', commit + ':' + SCRIPT], cwd=repo,
+                             stdout=out, stderr=subprocess.PIPE, creationflags=NO_WINDOW)
+        _, err = p.communicate()
+        if p.returncode: raise Failure('committed deployment runner extraction failed')
+    transition.update(source_commit=source_commit, source_tree=source_tree,
+                      source_archive_sha256=archive_sha, deployment_tool_commit=commit,
+                      deployment_tool_sha256=digest(runner))
+    transition_path = archive.with_suffix('.transition.json')
+    with transition_path.open('x', encoding='utf-8') as stream:
+        stream.write(json.dumps(transition, indent=2) + '\n')
     ssh("ga401", f"umask 077; mkdir -p {REMOTE} && mkdir {root}", executor)
+    ssh('ga401', f'umask 077; mkdir {root}/deployment-owner', executor)
     scp(archive, "ga401", f"{root}/source.tar", executor)
+    scp(runner, 'ga401', f'{root}/deployment-owner/upgrade.py', executor)
+    scp(transition_path, 'ga401', f'{root}/transition.json', executor)
     remote_sha=ssh("ga401", f"sha256sum {root}/source.tar", executor).split()[0]
     if remote_sha != archive_sha: raise Failure("remote source archive hash mismatch")
+    for local, remote in ((runner, 'deployment-owner/upgrade.py'), (transition_path, 'transition.json')):
+        if ssh('ga401', f'sha256sum {root}/{remote}', executor).split()[0] != digest(local):
+            raise Failure('remote deployment input hash mismatch')
     extract = "import tarfile,os; os.umask(0o077); t=tarfile.open(%s); names=t.getnames(); assert all((n == 'source' or n.startswith('source/')) and '..' not in n.split('/') for n in names); assert all(not (i.issym() or i.islnk()) for i in t.getmembers()); t.extractall(%s, filter='data')" % (repr(f"{root}/source.tar"), repr(root))
     ssh("ga401", f"python3 -c {shlex.quote(extract)}", executor)
-    commands=[("preflight", f"python3 {root}/source/{SCRIPT} preflight --release-root {root} --source-commit {commit}"),
-              ("build", f"python3 {root}/source/{SCRIPT} build --release-root {root} --source-commit {commit}"),
-              ("rehearse", f"python3 {root}/source/{SCRIPT} rehearse --release-root {root} --source-commit {commit}"),
-              ("activate", f"python3 {root}/source/{SCRIPT} activate --release-root {root} --source-commit {commit}")]
+    commands=[(phase, phase_command(root, source_commit, phase))
+              for phase in ('preflight', 'build', 'rehearse', 'activate')]
     receipts={}
     for phase, command in commands:
         print('GA401 phase: ' + phase, flush=True)
         receipts[phase]=ssh("ga401", command, executor)
         print(receipts[phase], flush=True)
-    result={"commit":commit,"archive":str(archive),"archive_sha256":archive_sha,"remote_root":root,"receipts":{k:digest_text(v) for k,v in receipts.items()}}
+    result={"commit":commit,"source_commit":source_commit,"source_tree":source_tree,
+            "archive":str(archive),"archive_sha256":archive_sha,"remote_root":root,
+            "deployment_tool_sha256":transition['deployment_tool_sha256'],
+            "transition_sha256":digest(transition_path),
+            "receipts":{k:digest_text(v) for k,v in receipts.items()}}
     common_state = common / "sop" / "ga401-upgrade-state.json"
     common_state.parent.mkdir(parents=True, exist_ok=True); common_state.write_text(json.dumps(result, indent=2)+"\n", encoding="utf-8")
     return result
 
 def digest_text(value: str) -> str: return hashlib.sha256(value.encode()).hexdigest()
 
+
+def phase_command(root, source_commit, phase):
+    if not HEX40.fullmatch(source_commit) or root != f'{REMOTE}/{source_commit}':
+        raise Failure('invalid remote release identity')
+    if phase not in ('preflight', 'build', 'rehearse', 'activate', 'verify'):
+        raise Failure('invalid upgrade phase')
+    return (f'python3 {root}/deployment-owner/upgrade.py {phase} --release-root {root} '
+            f'--source-commit {source_commit} --transition-file {root}/transition.json '
+            f'--deployment-tool {root}/deployment-owner/upgrade.py')
+
 def verify(repo: Path, executor=subprocess.run) -> str:
     commit = _commit(repo, executor=executor)
     state_path = common_dir(repo, executor) / 'sop' / 'ga401-upgrade-state.json'
     state=json.loads(state_path.read_text(encoding="utf-8"))
     root=state.get("remote_root")
-    if state.get('commit') != commit or root != f"{REMOTE}/{commit}": raise Failure("deploy state has invalid source binding")
-    return ssh("ga401", f"python3 {root}/source/{SCRIPT} verify --release-root {root} --source-commit {commit}", executor)
+    source_commit = state.get('source_commit', '')
+    if not isinstance(source_commit, str) or not HEX40.fullmatch(source_commit) or state.get('commit') != commit or root != f"{REMOTE}/{source_commit}":
+        raise Failure("deploy state has invalid source binding")
+    for remote, key in (('deployment-owner/upgrade.py', 'deployment_tool_sha256'), ('transition.json', 'transition_sha256'), ('source.tar', 'archive_sha256')):
+        if ssh('ga401', f'sha256sum {root}/{remote}', executor).split()[0] != state.get(key):
+            raise Failure('deployed release input drift')
+    return ssh("ga401", phase_command(root, source_commit, 'verify'), executor)
 
 def main(argv=None) -> int:
     p=argparse.ArgumentParser(); p.add_argument("mode", choices=["readiness","prepare","quick","full","deploy","verify"]); p.add_argument("--repo", default="."); p.add_argument("--state", default="upgrade-controller.json"); a=p.parse_args(argv)

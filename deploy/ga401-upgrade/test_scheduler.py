@@ -81,7 +81,9 @@ class Tests(unittest.TestCase):
             probe.write_text(prefix + "Write-Output $root\n",encoding='utf-8')
             stub=("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); function Get-ScheduledTask { [pscustomobject]@{Description='Multica GA401 committed upstream updater v1'; State='Ready'; Actions=@([pscustomobject]@{Execute='pwsh.exe';Arguments="
                   + ps(f'-NoProfile -File "{old / "run-cycle.ps1"}"') + "})} }; & " + ps(probe)
-                  + " -SourceDirectory " + ps(owner.parents[1]) + " -SourceCommit " + ps('a'*40))
+                  # The prefix is tested from this worktree, but its installed
+                  # source admission intentionally accepts only the reserved owner.
+                  + " -SourceDirectory " + ps(Path(r'C:\github\tools\upstream\multica-ga401')) + " -SourceCommit " + ps('a'*40))
             for supplied in (None, old, new):
                 with self.subTest(supplied=supplied):
                     command=stub + (" -InstallationRoot " + ps(supplied) if supplied else '')

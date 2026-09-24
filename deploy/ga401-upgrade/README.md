@@ -86,17 +86,44 @@ receipt to be complete. Read-only `snapshot` validates live source, images,
 ledger and Compose/container contracts without modifying deployment state.
 
 Phases are preflight, build, rehearse, activate and verify. Images use the exact
-committed archive. Runtime inherits the previous filesystem/configuration and
-replaces only the Multica executable. A private dump is restored and migrated
-in isolated PostgreSQL 17 before cutover. Activation rechecks idle admission,
-stops writers and retains a final database dump plus uploads/runtime backups.
+committed product archive. The app release preserves the independently deployed
+runtime container, image, configuration and volumes. A private dump is restored
+and migrated in isolated PostgreSQL 17 before cutover. Rehearsal compares the
+complete migration ledger, durable row IDs, selected business-content hashes
+and the expected status-category normalization. It refuses unexpected task,
+trigger-principal, PR-link or delivery-table changes. Uploads are independently
+restored into an ephemeral filesystem. Activation rechecks idle
+admission, stops app writers and retains a final database dump plus uploads backup.
 
-Only backend, frontend and the named runtime are replaced through separate
-image overrides. PostgreSQL, original Compose/env and existing volumes remain.
-Verify checks health, readiness, public routing, runtime version, invite-only
+Only backend and frontend are replaced through an app image override.
+PostgreSQL, original Compose/env and existing volumes remain.
+Verify checks health, readiness, public routing, unchanged runtime identity, invite-only
 configuration, durable row IDs and volume contracts. The health client declares
 its identity instead of changing Cloudflare security policy.
 
 No volume deletion, prune, automatic rollback, router/DNS edit or provider
 updater change occurs. Slash/native voice checks preserve the current feature
 boundary; they do not constitute a physical microphone test.
+
+## Separately released product source
+
+A manual app upgrade can consume an already-published custom Desktop source
+without merging deployment tooling into the product branch. The transition
+template pins `source_commit` and `source_tree`; `MULTICA_GA401_PRODUCT_REPO`
+selects an existing clean checkout at exactly that identity. Preparation and
+custom feature/auth gates run against that checkout. The deployment owner stays
+in this branch and passes its own tests and required frozen-diff review.
+
+After SOP commits the deployment owner, the controller archives the pinned
+product source and uploads the committed runner separately. The external
+`<release-root>/transition.json` binds the product commit/tree/archive SHA-256,
+deployment-tool commit and runner SHA-256, prior completed app receipt, current
+runtime image, and target version. The remote owner validates these inputs on
+every phase. The transition and runner never overwrite files in the product
+archive. The deployment and verification receipts retain both source identities.
+
+Running `preflight`, `build`, then `rehearse` directly stops before activation;
+each command requires the exact external transition and deployment-tool paths.
+The normal authorized SOP deployment executes all phases in order. Failed or
+interrupted phases remain terminal and preserve their evidence. This manual
+path does not reset the separately held scheduled upstream-update cycle.

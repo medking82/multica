@@ -1,4 +1,4 @@
-import json, tempfile, unittest
+import hashlib, json, tarfile, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
 import upgrade
@@ -12,26 +12,39 @@ class TransitionTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.base=Path(self.tmp.name)/'upgrades'; self.root=self.base/NEW
         source=self.root/'source/deploy/ga401-upgrade'; source.mkdir(parents=True)
-        (source/'transition.json').write_text(json.dumps({'prior_commit':OLD,'prior_ledger':'450_ok','prior_images':IMAGES,'target_version':'0.4.39','upstream_commit':UPSTREAM}))
+        with tarfile.open(self.root/'source.tar','w:') as archive:
+            archive.add(source, arcname='source/deploy/ga401-upgrade')
+        transition={'prior_commit':OLD,'prior_ledger':'450_ok','prior_images':IMAGES,
+                    'target_version':'0.5.2-custom.109','upstream_commit':UPSTREAM,
+                    'source_commit':NEW,'source_tree':'c'*40,
+                    'source_archive_sha256':hashlib.sha256((self.root/'source.tar').read_bytes()).hexdigest(),
+                    'deployment_tool_commit':'d'*40,
+                    'deployment_tool_sha256':upgrade.file_hash(Path(upgrade.__file__))}
+        (self.root/'transition.json').write_text(json.dumps(transition))
         prior=self.base/OLD; prior.mkdir()
         (prior/'state.json').write_text(json.dumps({'status':'complete','completed':list(upgrade.PHASES),'commit':OLD,'images':IMAGES,'rehearsal':{'ledger':'450_ok'}}))
         (self.root/'state.json').write_text(json.dumps({'status':'ready','completed':[],'commit':NEW}))
         self.oldbase=upgrade.BASE; upgrade.BASE=self.base
     def tearDown(self): upgrade.BASE=self.oldbase; self.tmp.cleanup()
     def test_valid_transition_binds_previous_receipt_and_target_version(self):
-        u=upgrade.Upgrade(self.root,NEW); self.assertEqual(u.old_commit,OLD); self.assertTrue(u.version.startswith('0.4.39-ga401.'))
+        u=upgrade.Upgrade(self.root,NEW); self.assertEqual(u.old_commit,OLD); self.assertTrue(u.version.startswith('0.5.2-custom.109-ga401.'))
     def test_non_string_commit_binding_fails_closed(self):
-        p=self.root/'source/deploy/ga401-upgrade/transition.json'; data=json.loads(p.read_text()); data['upstream_commit']=None; p.write_text(json.dumps(data))
+        p=self.root/'transition.json'; data=json.loads(p.read_text()); data['upstream_commit']=None; p.write_text(json.dumps(data))
         with self.assertRaises(upgrade.Failure): upgrade.Upgrade(self.root,NEW)
 
     def test_missing_or_malformed_transition_refused(self):
-        (self.root/'source/deploy/ga401-upgrade/transition.json').unlink()
+        (self.root/'transition.json').unlink()
         with self.assertRaises(upgrade.Failure): upgrade.Upgrade(self.root,NEW)
     def test_bad_version_and_same_commit_refused(self):
-        p=self.root/'source/deploy/ga401-upgrade/transition.json'; data=json.loads(p.read_text()); data['target_version']='latest'; p.write_text(json.dumps(data))
+        p=self.root/'transition.json'; data=json.loads(p.read_text()); data['target_version']='latest'; p.write_text(json.dumps(data))
         with self.assertRaisesRegex(upgrade.Failure,'version'): upgrade.Upgrade(self.root,NEW)
-        data['target_version']='0.4.39'; data['upstream_commit']=OLD; p.write_text(json.dumps(data))
+        data['target_version']='0.5.2-custom.109'; data['upstream_commit']=OLD; p.write_text(json.dumps(data))
         with self.assertRaises(upgrade.Failure): upgrade.Upgrade(self.root,OLD)
+    def test_source_and_deployment_owner_digests_fail_closed(self):
+        p=self.root/'transition.json'; data=json.loads(p.read_text()); data['source_commit']='e'*40; p.write_text(json.dumps(data))
+        with self.assertRaisesRegex(upgrade.Failure,'source mismatch'): upgrade.Upgrade(self.root,NEW)
+        data['source_commit']=NEW; data['deployment_tool_sha256']='0'*64; p.write_text(json.dumps(data))
+        with self.assertRaisesRegex(upgrade.Failure,'deployment tool digest'): upgrade.Upgrade(self.root,NEW)
     def test_snapshot_is_read_only_and_binds_completed_deployment(self):
         contract={'mounts':{},'ports':{},'user':'','network':'fixture'}
         observed={'Image':IMAGES['backend'],'State':{'Running':True},'Mounts':[], 'HostConfig':{'PortBindings':{},'NetworkMode':'fixture'},'Config':{'User':''}}
