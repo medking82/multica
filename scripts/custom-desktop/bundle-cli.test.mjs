@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 const source = new URL("../../apps/desktop/scripts/bundle-cli.mjs", import.meta.url);
+const packageSource = new URL("../../apps/desktop/scripts/package.mjs", import.meta.url);
 const goCaches = JSON.parse(execFileSync("go", ["env", "-json", "GOCACHE", "GOMODCACHE"], {
   encoding: "utf8", windowsHide: true, timeout: 15_000,
 }));
@@ -23,6 +24,7 @@ function fixture(t) {
   mkdirSync(join(server, "cmd/multica"), { recursive: true });
   mkdirSync(join(directory, "empty-hooks"));
   copyFileSync(source, join(scripts, "bundle-cli.mjs"));
+  copyFileSync(packageSource, join(scripts, "package.mjs"));
   writeFileSync(join(server, "go.mod"), "module version-fixture\n\ngo 1.26.0\n");
   // Compile only this tiny local program: no real agent, account or network.
   writeFileSync(join(server, "cmd/multica/main.go"), [
@@ -103,5 +105,5 @@ test("normal tagged builds preserve their git-derived CLI version", (t) => {
   const result = repo.build();
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(repo.output().startsWith("multica v0.4.36 (commit: "));
+  assert.ok(repo.output().startsWith("multica 0.4.36 (commit: "));
 });
