@@ -453,6 +453,7 @@
       "tasks_write": "エージェントの実行を開始・更新する",
       "agents_read": "agent 一覧を読み取る",
       "members_read": "メンバー一覧を読み取る",
+      "skills_read": "ワークスペースの Skill 名と説明を読み取る",
       "storage_user": "メンバーごとにデータを保存する",
       "storage_workspace": "ワークスペース共有のデータを保存する",
       "net": "{{domain}} にデータを送信する",

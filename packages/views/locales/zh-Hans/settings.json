@@ -453,6 +453,7 @@
       "tasks_write": "启动和更新智能体运行",
       "agents_read": "读取智能体列表",
       "members_read": "读取成员列表",
+      "skills_read": "读取工作区 Skill 名称和描述",
       "storage_user": "为每位成员单独存储数据",
       "storage_workspace": "存储工作区共享数据",
       "net": "向 {{domain}} 发送数据",

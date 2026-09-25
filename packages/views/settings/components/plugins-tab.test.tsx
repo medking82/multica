@@ -90,7 +90,7 @@ const PREVIEW = {
     version: "1.0.0",
     author: { name: "example" },
   },
-  scopes: ["issues:read", "comments:write", "net:example.com"],
+  scopes: ["issues:read", "comments:write", "skills:read", "net:example.com"],
   config_schema: [],
   version_id: "version-1",
   version: "1.0.0",
@@ -152,6 +152,8 @@ describe("PluginsTab", () => {
     await screen.findByText("This Plugin is asking for the following access");
     expect(screen.getByText("issues:read")).toBeInTheDocument();
     expect(screen.getByText("comments:write")).toBeInTheDocument();
+    expect(screen.getByText("skills:read")).toBeInTheDocument();
+    expect(screen.getByText("Read workspace Skill names and descriptions")).toBeInTheDocument();
     expect(screen.getByText("net:example.com")).toBeInTheDocument();
     expect(screen.getByText("Send data to example.com")).toBeInTheDocument();
     expect(mockInstall).not.toHaveBeenCalled();
@@ -161,7 +163,7 @@ describe("PluginsTab", () => {
     // the consent screen back to describing one artifact while another runs.
     await waitFor(() => expect(mockInstall).toHaveBeenCalledWith({
       version_id: "version-1",
-      granted_scopes: ["issues:read", "comments:write", "net:example.com"],
+      granted_scopes: ["issues:read", "comments:write", "skills:read", "net:example.com"],
     }));
   });
 

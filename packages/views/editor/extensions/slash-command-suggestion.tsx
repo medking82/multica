@@ -11,13 +11,18 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
+import { configStore, featureFlagEnabled } from "@multica/core/config";
+import { PLUGINS_V1_FLAG } from "@multica/core/feature-flags";
 import { getCurrentWsId } from "@multica/core/platform";
+import { pluginInstallationsOptions, pluginKeys } from "@multica/core/plugins";
 import { isImeComposing } from "@multica/core/utils";
 import {
   skillListOptions,
   workspaceKeys,
 } from "@multica/core/workspace/queries";
-import type { SkillSummary } from "@multica/core/types";
+import type { PluginInstallationListResponse, SkillSummary } from "@multica/core/types";
+import { collectComposerCommands, type PluginComposerCommandTarget, type PluginComposerContext } from "../../plugins/plugin-composer-commands";
+import { isDesktopShell } from "../../platform/local-directory";
 import { useT } from "../../i18n";
 import {
   createSuggestionPopupRender,
@@ -29,6 +34,9 @@ import {
 import { isTriggerArmedAt } from "./suggestion-trigger-arming";
 
 const MAX_ITEMS = 20;
+// Migration bridge: once the installable picker is active in a workspace, it
+// owns Skill selection. Older workspaces keep the inline picker until install.
+const WORKSPACE_SKILLS_PLUGIN_KEY = "ai.multica.composer-skills";
 
 /** Known built-in command ids — the keys under editor `slash_command.commands`. */
 export type BuiltinCommandKey = "note";
@@ -46,6 +54,17 @@ export interface SlashCommandItem {
    * so the visible string stays localized (the typed `/label` does not).
    */
   descriptionKey?: BuiltinCommandKey;
+  /** A declarative command contributed by an enabled workspace plugin. */
+  pluginCommand?: PluginComposerCommandTarget;
+}
+
+export interface PluginCommandSuggestionOptions {
+  context: PluginComposerContext;
+  onSelect: (selection: {
+    editor: Parameters<NonNullable<SuggestionOptions<SlashCommandItem>["command"]>>[0]["editor"];
+    range: { from: number; to: number };
+    target: PluginComposerCommandTarget;
+  }) => void;
 }
 
 interface SlashCommandListProps {
@@ -209,9 +228,47 @@ function workspaceSkillItems(
     }));
 }
 
+interface PluginCommandResults {
+  items: SlashCommandItem[];
+  replacesSkills: boolean;
+}
+
+function pluginCommandItems(
+  qc: QueryClient,
+  wsId: string,
+  query: string,
+  options?: PluginCommandSuggestionOptions,
+): PluginCommandResults | Promise<PluginCommandResults> {
+  if (!options || !featureFlagEnabled(configStore.getState().featureFlags, PLUGINS_V1_FLAG)) {
+    return { items: [], replacesSkills: false };
+  }
+  const project = (response: PluginInstallationListResponse): PluginCommandResults => {
+    const targets = collectComposerCommands(response.plugins, options.context, isDesktopShell() ? "desktop" : "web");
+    return {
+      // Only this exact installed plugin owns the legacy picker cutover. A
+      // similarly named third-party command cannot hide workspace Skills.
+      replacesSkills: targets.some((target) =>
+        target.installation.plugin_key === WORKSPACE_SKILLS_PLUGIN_KEY && target.command.key === "skills"),
+      items: targets
+        .filter((target) => target.command.label.toLowerCase().startsWith(query.toLowerCase()))
+        .map((target) => ({
+          id: `plugin:${target.id}`,
+          label: target.command.label,
+          description: target.command.description,
+          pluginCommand: target,
+        })),
+    };
+  };
+  const cached = qc.getQueryData<PluginInstallationListResponse>(pluginKeys.installed(wsId));
+  if (cached) return project(cached);
+  return qc.fetchQuery(pluginInstallationsOptions(wsId)).then(project)
+    .catch(() => ({ items: [], replacesSkills: false }));
+}
+
 function buildItems(
   qc: QueryClient,
   query: string,
+  pluginOptions?: PluginCommandSuggestionOptions,
 ): SlashCommandItem[] | Promise<SlashCommandItem[]> {
   const wsId = getCurrentWsId();
   if (!wsId) return [];
@@ -219,12 +276,16 @@ function buildItems(
   // Prefer the cache so every keystroke stays synchronous after the first
   // open. A cold picker fetches the workspace library lazily; Suggestion
   // accepts a Promise and discards stale query results for us.
-  const cached = qc.getQueryData<SkillSummary[]>(workspaceKeys.skills(wsId));
-  if (cached) return workspaceSkillItems(cached, query);
-  return qc
-    .fetchQuery(skillListOptions(wsId))
-    .then((skills) => workspaceSkillItems(skills, query))
-    .catch(() => []);
+  const combine = (plugins: PluginCommandResults): SlashCommandItem[] | Promise<SlashCommandItem[]> => {
+    if (plugins.replacesSkills) return plugins.items.slice(0, MAX_ITEMS);
+    const merge = (skills: SkillSummary[]) =>
+      [...plugins.items, ...workspaceSkillItems(skills, query)].slice(0, MAX_ITEMS);
+    const cached = qc.getQueryData<SkillSummary[]>(workspaceKeys.skills(wsId));
+    if (cached) return merge(cached);
+    return qc.fetchQuery(skillListOptions(wsId)).then(merge).catch(() => plugins.items);
+  };
+  const plugins = pluginCommandItems(qc, wsId, query, pluginOptions);
+  return plugins instanceof Promise ? plugins.then(combine) : combine(plugins);
 }
 
 function insertSlashSkill(
@@ -255,7 +316,7 @@ function insertSlashSkill(
   window.getSelection()?.collapseToEnd();
 }
 
-export function createSlashCommandSuggestion(qc: QueryClient): Omit<
+export function createSlashCommandSuggestion(qc: QueryClient, pluginOptions?: PluginCommandSuggestionOptions): Omit<
   SuggestionOptions<SlashCommandItem>,
   "editor"
 > {
@@ -267,8 +328,12 @@ export function createSlashCommandSuggestion(qc: QueryClient): Omit<
     // Only open over a `/` the user actually typed, so a pasted path
     // (`/usr/local/bin`) never opens the skill picker (MUL-5429).
     shouldShow: ({ editor, range }) => isTriggerArmedAt(editor, range.from),
-    items: ({ query }) => buildItems(qc, query),
+    items: ({ query }) => buildItems(qc, query, pluginOptions),
     command: ({ editor, range, props }) => {
+      if (props.pluginCommand && pluginOptions) {
+        pluginOptions.onSelect({ editor, range, target: props.pluginCommand });
+        return;
+      }
       insertSlashSkill(editor, range, props);
     },
     render: createSuggestionPopupRender<SlashCommandItem, SlashCommandItem, SlashCommandListRef, SlashCommandListProps>({
@@ -316,6 +381,7 @@ export function buildBuiltinCommandItems(
   query: string,
   quickActions: { id: string; name: string; description?: string }[] = [],
   skills: SkillSummary[] = [],
+  pluginItems: SlashCommandItem[] = [],
 ): SlashCommandItem[] {
   const q = query.toLowerCase();
   // Quick actions lead: on an issue they are the reason a user reaches for
@@ -336,12 +402,18 @@ export function buildBuiltinCommandItems(
   // retain their leading position; Skills use only the remaining budget.
   const actionBudget = Math.max(0, MAX_ITEMS - matchingBuiltins.length);
   const visibleActions = matchingActions.slice(0, actionBudget);
-  const skillBudget = Math.max(
+  const pluginBudget = Math.max(
     0,
     MAX_ITEMS - visibleActions.length - matchingBuiltins.length,
   );
+  const visiblePlugins = pluginItems.slice(0, pluginBudget);
+  const skillBudget = Math.max(
+    0,
+    MAX_ITEMS - visibleActions.length - visiblePlugins.length - matchingBuiltins.length,
+  );
   return [
     ...visibleActions,
+    ...visiblePlugins,
     ...matchingSkills.slice(0, skillBudget),
     ...matchingBuiltins,
   ];
@@ -372,6 +444,7 @@ export interface BuiltinCommandSuggestionOptions {
 export function createBuiltinCommandSuggestion(
   options: BuiltinCommandSuggestionOptions = {},
   qc?: QueryClient,
+  pluginOptions?: PluginCommandSuggestionOptions,
 ): Omit<SuggestionOptions<SlashCommandItem>, "editor"> {
   const pluginKey = new PluginKey("builtinCommandSuggestion");
 
@@ -385,14 +458,21 @@ export function createBuiltinCommandSuggestion(
       const quickActions = options.getQuickActions?.() ?? [];
       const wsId = getCurrentWsId();
       if (!qc || !wsId) return buildBuiltinCommandItems(query, quickActions);
-      const cached = qc.getQueryData<SkillSummary[]>(workspaceKeys.skills(wsId));
-      if (cached) return buildBuiltinCommandItems(query, quickActions, cached);
-      return qc
-        .fetchQuery(skillListOptions(wsId))
-        .then((skills) => buildBuiltinCommandItems(query, quickActions, skills))
-        .catch(() => buildBuiltinCommandItems(query, quickActions));
+      const combine = (plugins: PluginCommandResults): SlashCommandItem[] | Promise<SlashCommandItem[]> => {
+        if (plugins.replacesSkills) return buildBuiltinCommandItems(query, quickActions, [], plugins.items);
+        const merge = (skills: SkillSummary[]) => buildBuiltinCommandItems(query, quickActions, skills, plugins.items);
+        const cached = qc.getQueryData<SkillSummary[]>(workspaceKeys.skills(wsId));
+        if (cached) return merge(cached);
+        return qc.fetchQuery(skillListOptions(wsId)).then(merge).catch(() => merge([]));
+      };
+      const plugins = pluginCommandItems(qc, wsId, query, pluginOptions);
+      return plugins instanceof Promise ? plugins.then(combine) : combine(plugins);
     },
     command: ({ editor, range, props }) => {
+      if (props.pluginCommand && pluginOptions) {
+        pluginOptions.onSelect({ editor, range, target: props.pluginCommand });
+        return;
+      }
       if (props.skillId) {
         insertSlashSkill(editor, range, props);
         return;

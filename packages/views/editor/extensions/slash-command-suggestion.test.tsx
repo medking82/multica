@@ -5,6 +5,9 @@ import { I18nProvider } from "@multica/core/i18n/react";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type { SkillSummary } from "@multica/core/types";
 import type { QueryClient } from "@tanstack/react-query";
+import { configStore } from "@multica/core/config";
+import { pluginKeys } from "@multica/core/plugins";
+import type { PluginInstallationListResponse } from "@multica/core/types";
 import enEditor from "../../locales/en/editor.json";
 
 const TEST_RESOURCES = {
@@ -55,10 +58,14 @@ function skill(overrides: Partial<SkillSummary>): SkillSummary {
 function fakeQc(data: {
   skills?: SkillSummary[];
   fetchedSkills?: SkillSummary[];
+  plugins?: PluginInstallationListResponse;
 }): QueryClient {
   const map = new Map<string, unknown>();
   if (data.skills) {
     map.set(JSON.stringify(workspaceKeys.skills("ws-1")), data.skills);
+  }
+  if (data.plugins) {
+    map.set(JSON.stringify(pluginKeys.installed("ws-1")), data.plugins);
   }
   return {
     getQueryData: (key: readonly unknown[]) => map.get(JSON.stringify(key)),
@@ -83,6 +90,58 @@ function items(qc: QueryClient, query = ""): SlashCommandItem[] {
 }
 
 describe("slash command suggestion items", () => {
+  it("offers a workspace plugin command and delegates selection without editing the draft", () => {
+    const previousFlags = configStore.getState().featureFlags;
+    configStore.setState({ featureFlags: { ...previousFlags, plugins_v1: true } });
+    try {
+      const qc = fakeQc({
+        skills: [skill({ id: "s1", name: "review" })],
+        plugins: { plugins: [{
+          id: "installed-1",
+          plugin_key: "ai.multica.other-command",
+          name: "Workspace Skills",
+          enabled: true,
+          composer_commands: [{ key: "skills", label: "skills", contexts: ["chat"], surface: "picker" }],
+          surfaces: [{ key: "picker", type: "modal", name: "Skills", entry: "ui/main.js" }],
+        } as PluginInstallationListResponse["plugins"][number]] },
+      });
+      const onSelect = vi.fn();
+      const config = createSlashCommandSuggestion(qc, { context: "chat", onSelect });
+      const entries = config.items!({ query: "", editor: {} as never, signal: new AbortController().signal }) as SlashCommandItem[];
+      expect(entries.map((entry) => entry.label)).toEqual(["skills", "review"]);
+
+      const editor = {} as never;
+      const range = { from: 0, to: 7 };
+      config.command!({ editor, range, props: entries[0] } as never);
+      expect(onSelect).toHaveBeenCalledWith({ editor, range, target: entries[0]?.pluginCommand });
+    } finally {
+      configStore.setState({ featureFlags: previousFlags });
+    }
+  });
+
+  it("hands Skill selection to the installed composer-skills plugin, including unmatched queries", () => {
+    const previousFlags = configStore.getState().featureFlags;
+    configStore.setState({ featureFlags: { ...previousFlags, plugins_v1: true } });
+    try {
+      const qc = fakeQc({
+        skills: [skill({ id: "s1", name: "review" })],
+        plugins: { plugins: [{
+          id: "installed-1",
+          plugin_key: "ai.multica.composer-skills",
+          enabled: true,
+          composer_commands: [{ key: "skills", label: "skills", contexts: ["chat"], surface: "picker" }],
+          surfaces: [{ key: "picker", type: "modal", name: "Skills", entry: "ui/main.js" }],
+        } as PluginInstallationListResponse["plugins"][number]] },
+      });
+      const config = createSlashCommandSuggestion(qc, { context: "chat", onSelect: vi.fn() });
+      const entries = (query: string) => config.items!({ query, editor: {} as never, signal: new AbortController().signal }) as SlashCommandItem[];
+      expect(entries("").map((entry) => entry.label)).toEqual(["skills"]);
+      expect(entries("rev")).toEqual([]);
+    } finally {
+      configStore.setState({ featureFlags: previousFlags });
+    }
+  });
+
   it("returns the Workspace Skill library without requiring Agent assignments", () => {
     const qc = fakeQc({
       skills: [

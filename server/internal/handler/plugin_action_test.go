@@ -201,6 +201,62 @@ func TestPluginActionRequiresAGrantedScope(t *testing.T) {
 	}
 }
 
+func TestPluginSkillsListIsScopedAndSummaryOnly(t *testing.T) {
+	installationID := installPluginForAction(t, []string{"skills:read"})
+	skillID := createImportTargetSkill(t, "plugin-picker-skill", testUserID, nil)
+
+	response := httptest.NewRecorder()
+	testHandler.ListPluginSkills(response, pluginActionRequest(http.MethodGet, "/v1/skills", installationID, nil, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("skills list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload publicapiv1.SkillListResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode skills response: %v", err)
+	}
+	found := false
+	for _, skill := range payload.Skills {
+		if skill.ID == skillID {
+			found = true
+			if skill.Name != "plugin-picker-skill" || skill.Description != "original description" {
+				t.Fatalf("unexpected skill summary: %+v", skill)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("workspace skill %s missing from response: %+v", skillID, payload.Skills)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw skills response: %v", err)
+	}
+	encoded, _ := json.Marshal(raw)
+	for _, privateField := range []string{"content", "config", "created_by", "workspace_id"} {
+		if strings.Contains(string(encoded), `"`+privateField+`"`) {
+			t.Fatalf("private Skill field %q leaked: %s", privateField, encoded)
+		}
+	}
+
+	// Standing plugin tokens have no human membership to bind the list to.
+	token, err := testHandler.PluginService.IssueInstallToken(context.Background(), parseUUID(installationID))
+	if err != nil {
+		t.Fatalf("issue install token: %v", err)
+	}
+	response = httptest.NewRecorder()
+	testHandler.ListPluginSkills(response, pluginInstallTokenRequest(http.MethodGet, "/v1/skills", token, nil, nil))
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "member_required") {
+		t.Fatalf("plugin actor should not list workspace Skills: status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	// The separate scope cannot be inferred from another read permission.
+	installationID = installPluginForAction(t, []string{"issues:read"})
+	response = httptest.NewRecorder()
+	testHandler.ListPluginSkills(response, pluginActionRequest(http.MethodGet, "/v1/skills", installationID, nil, nil))
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "skills:read") {
+		t.Fatalf("missing skills:read status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestPluginIssueUsesStableDTOAndRevisionETag(t *testing.T) {
 	installationID := installPluginForAction(t, []string{"issues:read", "issues:write"})
 	issueID := createTestIssue(t, "Plugin public DTO test", "todo", "none")

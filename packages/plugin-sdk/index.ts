@@ -69,6 +69,12 @@ export interface StorageKey {
   updated_at: string;
 }
 
+export interface WorkspaceSkill {
+  id: string;
+  name: string;
+  description?: string;
+}
+
 /** Thrown when the host refuses or the call fails. `status` mirrors HTTP. */
 export class MulticaPluginError extends Error {
   readonly status: number;
@@ -86,6 +92,9 @@ type Pending = {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
+type OutboundRequest = BridgeRequest extends infer Request
+  ? Request extends { id: string } ? Omit<Request, "id"> : never
+  : never;
 
 class Bridge {
   private port: MessagePort | null = null;
@@ -152,18 +161,22 @@ class Bridge {
     else this.queued.push(request);
   }
 
-  async request<T>(method: BridgeMethod, path: string, body?: unknown): Promise<T> {
+  async requestMessage<T>(request: OutboundRequest): Promise<T> {
     await this.ready;
     const id = `r${++this.sequence}`;
-    const request: BridgeRequest = { id, kind: "action", method, path, body };
+    const purpose = request.kind === "action" ? `${request.method} ${request.path}` : request.kind;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new MulticaPluginError(408, `Multica did not answer ${method} ${path} in time`));
+        reject(new MulticaPluginError(408, `Multica did not answer ${purpose} in time`));
       }, DEFAULT_TIMEOUT_MS);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
-      this.port?.postMessage(request);
+      this.port?.postMessage({ ...request, id });
     });
+  }
+
+  async request<T>(method: BridgeMethod, path: string, body?: unknown): Promise<T> {
+    return this.requestMessage<T>({ kind: "action", method, path, body });
   }
 }
 
@@ -266,6 +279,21 @@ export const multica = {
     /** Current design tokens, and a subscription for theme switches. */
     onThemeChange(listener: (theme: ThemeTokens) => void): () => void {
       return bridge.onThemeChange(listener);
+    },
+  },
+
+  skills: {
+    /** Workspace Skill summaries only; the Skill body never enters the plugin frame. */
+    async list(): Promise<WorkspaceSkill[]> {
+      const result = await bridge.request<{ skills: WorkspaceSkill[] }>("GET", "/skills");
+      return result.skills ?? [];
+    },
+  },
+
+  composer: {
+    /** Insert Markdown into the specific draft whose slash command opened this surface. */
+    async insert(text: string): Promise<void> {
+      await bridge.requestMessage<void>({ kind: "composer.insert", format: "markdown", text });
     },
   },
 };

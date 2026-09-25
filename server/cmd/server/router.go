@@ -101,6 +101,7 @@ var corsExposedHeaders = []string{
 
 func registerPluginActionRoutes(r chi.Router, h *handler.Handler) {
 	r.Get(publicapiv1.PathContext, h.GetPluginContext)
+	r.Get(publicapiv1.PathSkills, h.ListPluginSkills)
 	r.Get(publicapiv1.PathIssue, h.GetPluginIssue)
 	r.Patch(publicapiv1.PathIssue, h.PatchPluginIssue)
 	r.Get(publicapiv1.PathIssueComments, h.ListPluginComments)
