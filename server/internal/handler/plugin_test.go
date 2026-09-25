@@ -172,10 +172,11 @@ func withLocalPluginSourceIn(t *testing.T, root string, manifest string) string 
 	previousSecrets := testHandler.PluginService.Secrets
 	testHandler.PluginService.LocalDir = root
 	testHandler.PluginService.Host = plugincontract.Capabilities{
-		SurfaceTypes:  map[string]bool{plugincontract.SurfaceIssuePanel: true, plugincontract.SurfaceSidebarPanel: true, plugincontract.SurfaceModal: true},
-		HookTriggers:  map[string]bool{plugincontract.TriggerUI: true, plugincontract.TriggerManual: true, plugincontract.TriggerAgent: true, plugincontract.TriggerEvent: true, plugincontract.TriggerSchedule: true},
-		HookTransport: map[string]bool{plugincontract.TransportHTTP: true, plugincontract.TransportMCP: true},
-		ResourceTypes: map[string]bool{plugincontract.ResourceSkill: true},
+		SurfaceTypes:     map[string]bool{plugincontract.SurfaceIssuePanel: true, plugincontract.SurfaceSidebarPanel: true, plugincontract.SurfaceModal: true},
+		HookTriggers:     map[string]bool{plugincontract.TriggerUI: true, plugincontract.TriggerManual: true, plugincontract.TriggerAgent: true, plugincontract.TriggerEvent: true, plugincontract.TriggerSchedule: true},
+		HookTransport:    map[string]bool{plugincontract.TransportHTTP: true, plugincontract.TransportMCP: true},
+		ResourceTypes:    map[string]bool{plugincontract.ResourceSkill: true},
+		ComposerCommands: true,
 	}
 	box, err := secretbox.New(bytes.Repeat([]byte{7}, 32))
 	if err != nil {
@@ -443,14 +444,17 @@ func TestPluginComposerCommandsRoundTripThroughPreviewAndInstallation(t *testing
 	withPluginsV1Flag(t, testHandler, true)
 	cleanupPluginInstallations(t)
 	versionID := withLocalPluginSource(t, composerCommandHandlerTestManifest)
+	// Publishing supports the contribution; preview still refuses a host whose
+	// composer runtime is disabled.
+	testHandler.PluginService.Host.ComposerCommands = false
 	previewBody, _ := json.Marshal(map[string]string{"version_id": versionID})
 	blockedPreview := httptest.NewRecorder()
 	testHandler.PreviewPlugin(blockedPreview, pluginHandlerRequest(http.MethodPost, "/plugins/preview", previewBody, map[string]string{"id": testWorkspaceID}))
 	if blockedPreview.Code != http.StatusUnprocessableEntity || !strings.Contains(blockedPreview.Body.String(), "composer commands") {
 		t.Fatalf("unsupported composer command preview status=%d body=%s", blockedPreview.Code, blockedPreview.Body.String())
 	}
-	// This test opts into the new runtime capability only after asserting the
-	// default host refuses to preview/install a contribution it cannot render.
+	// Enable the runtime only after asserting that preview refuses a host that
+	// cannot render the contribution.
 	testHandler.PluginService.Host.ComposerCommands = true
 
 	previewRecorder := httptest.NewRecorder()
