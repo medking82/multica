@@ -301,6 +301,33 @@ func (h *Handler) GetPluginContext(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, publicPluginContext(h.PluginService.BuildPluginContext(caller, workspace, user, issue)))
 }
 
+// ListPluginSkills — GET /v1/skills
+// The composer picker needs stable Skill identifiers, not Skill contents.
+// Scope and workspace membership are checked before the summary-only query.
+func (h *Handler) ListPluginSkills(w http.ResponseWriter, r *http.Request) {
+	caller, actor, ok := h.pluginCaller(w, r, plugincontract.ScopeSkillsRead)
+	if !ok {
+		return
+	}
+	if !actor.requireMember(w, r) {
+		return
+	}
+	rows, err := h.Queries.ListSkillSummariesByWorkspace(r.Context(), caller.WorkspaceID)
+	if err != nil {
+		publicapiv1.WriteProblem(w, r, http.StatusInternalServerError, "internal_error", "failed to list workspace Skills")
+		return
+	}
+	skills := make([]publicapiv1.SkillSummary, 0, len(rows))
+	for _, row := range rows {
+		skills = append(skills, publicapiv1.SkillSummary{
+			ID:          uuidToString(row.ID),
+			Name:        row.Name,
+			Description: row.Description,
+		})
+	}
+	writeJSON(w, http.StatusOK, publicapiv1.SkillListResponse{Skills: skills})
+}
+
 func publicPluginContext(context service.PluginContext) publicapiv1.Context {
 	payload := publicapiv1.Context{
 		Workspace: publicapiv1.ContextWorkspace{

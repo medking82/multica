@@ -454,6 +454,7 @@
       "tasks_write": "Démarrer et mettre à jour les exécutions des agents",
       "agents_read": "Lire la liste des agents",
       "members_read": "Lire la liste des membres",
+      "skills_read": "Lire les noms et descriptions des Skills de l'espace de travail",
       "storage_user": "Stocker des données pour chaque membre séparément",
       "storage_workspace": "Stocker des données partagées par l'espace de travail",
       "net": "Envoyer des données vers {{domain}}",

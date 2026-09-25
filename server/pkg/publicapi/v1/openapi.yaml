@@ -26,6 +26,21 @@ paths:
                 $ref: "#/components/schemas/Context"
         default:
           $ref: "#/components/responses/Problem"
+  /skills:
+    get:
+      operationId: listWorkspaceSkills
+      summary: List workspace Skill summaries
+      x-multica-contract: shared_resource
+      x-multica-scope: skills:read
+      responses:
+        "200":
+          description: Skill identifiers and display summaries; bodies and configuration are omitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillListResponse"
+        default:
+          $ref: "#/components/responses/Problem"
   /issues/{issue_ref}:
     parameters:
       - $ref: "#/components/parameters/IssueRef"
@@ -290,6 +305,21 @@ components:
         id: { type: string }
         identifier: { type: string }
         title: { type: string }
+    SkillSummary:
+      type: object
+      required: [id, name, description]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+    SkillListResponse:
+      type: object
+      required: [skills]
+      properties:
+        skills:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillSummary"
     Issue:
       type: object
       required:

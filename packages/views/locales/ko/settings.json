@@ -453,6 +453,7 @@
       "tasks_write": "에이전트 실행 시작 및 업데이트",
       "agents_read": "agent 목록 읽기",
       "members_read": "멤버 목록 읽기",
+      "skills_read": "워크스페이스 Skill 이름과 설명 읽기",
       "storage_user": "멤버별로 데이터 저장",
       "storage_workspace": "워크스페이스 공유 데이터 저장",
       "net": "{{domain}}(으)로 데이터 전송",

@@ -454,6 +454,7 @@
       "tasks_write": "Start and update agent runs",
       "agents_read": "Read the agent list",
       "members_read": "Read the member list",
+      "skills_read": "Read workspace Skill names and descriptions",
       "storage_user": "Store data for each member individually",
       "storage_workspace": "Store data shared by the workspace",
       "net": "Send data to {{domain}}",
