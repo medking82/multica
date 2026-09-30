@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DictationProvider } from "@multica/core/platform/dictation";
@@ -64,6 +64,11 @@ describe("native dictation in real lazy composers", () => {
     expect(submit).not.toHaveBeenCalled();
 
     await waitFor(() => expect(mic).not.toBeDisabled());
+    // Tiptap defers lazy activation focus to an animation frame. Settle that
+    // first interaction before moving focus back for the keyboard activation.
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
     mic.focus();
     const user = userEvent.setup();
     await user.keyboard("{Enter>}");

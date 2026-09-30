@@ -3,7 +3,7 @@ import { Editor, Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import { Suggestion } from "@tiptap/suggestion";
-import { PluginKey, TextSelection } from "@tiptap/pm/state";
+import { AllSelection, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { EditorView } from "@tiptap/pm/view";
 import { createMarkdownPasteExtension } from "./markdown-paste";
 import {
@@ -126,6 +126,11 @@ function typeFromKeyDownAndTextInput(editor: Editor, text: string): void {
 /** Keep ProseMirror's stale AllSelection while moving only the live DOM caret. */
 function placeDomCaretAtStart(editor: Editor): void {
   editor.view.dom.focus();
+  // deleteSelection normalizes to TextSelection in the current ProseMirror.
+  // Recreate Chrome's stale state explicitly before moving only the DOM caret.
+  editor.view.dispatch(
+    editor.state.tr.setSelection(new AllSelection(editor.state.doc)),
+  );
   const range = document.createRange();
   // Chrome anchors the caret on the contenteditable root after it removes the
   // selected slash; the schema-preserved empty paragraph is still its child.
