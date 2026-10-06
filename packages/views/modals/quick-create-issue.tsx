@@ -694,6 +694,7 @@ export function AgentCreatePanel({
             ref={editorRef}
             defaultValue={initialPrompt}
             enableSlashCommands
+            pluginComposerContext="agent_create"
             placeholder={anchorCommentId
               ? t(($) => $.create_issue.agent.source_context_prompt_placeholder)
               : t(($) => $.create_issue.agent.prompt_placeholder)}

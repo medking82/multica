@@ -25,6 +25,11 @@ func TestPluginActionRouteTrustBoundaries(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
+			name:       "skills API rejects a missing token before the handler",
+			path:       "/v1/skills",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
 			name:          "public API rejects a browser session token",
 			path:          "/v1/context",
 			authorization: "Bearer " + testToken,
@@ -37,8 +42,20 @@ func TestPluginActionRouteTrustBoundaries(t *testing.T) {
 			wantHandler:   true,
 		},
 		{
+			name:          "skills API passes plugin tokens to the Action handler",
+			path:          "/v1/skills",
+			authorization: "Bearer mpi_invalid",
+			wantHandler:   true,
+		},
+		{
 			name:          "surface bridge accepts a browser session",
 			path:          "/api/plugin-bridge/v1/context",
+			authorization: "Bearer " + testToken,
+			wantHandler:   true,
+		},
+		{
+			name:          "surface bridge exposes the scoped skills read",
+			path:          "/api/plugin-bridge/v1/skills",
 			authorization: "Bearer " + testToken,
 			wantHandler:   true,
 		},

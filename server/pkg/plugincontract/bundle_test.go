@@ -3,11 +3,34 @@ package plugincontract_test
 import (
 	"archive/zip"
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 )
+
+// Keep the shipped example on the same publish path as an uploaded package.
+// A syntactically valid manifest alone cannot catch a missing or invalid UI entry.
+func TestWorkspaceSkillsExampleIsPublishable(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "examples", "plugins", "composer-skills")
+	files := map[string]string{}
+	for _, name := range []string{plugincontract.ManifestFilename, "ui/main.js"} {
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("read example %s: %v", name, err)
+		}
+		files[name] = string(content)
+	}
+	bundle, err := plugincontract.ParseBundle(zipBundle(t, files))
+	if err != nil {
+		t.Fatalf("publish Workspace Skill picker example: %v", err)
+	}
+	if bundle.Manifest.Key != "ai.multica.composer-skills" || len(bundle.Manifest.Contributes.ComposerCommands) != 1 {
+		t.Fatalf("unexpected example contribution: %+v", bundle.Manifest)
+	}
+}
 
 const bundleManifest = `{
   "manifest_version": 1,

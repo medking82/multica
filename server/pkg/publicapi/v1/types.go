@@ -28,6 +28,18 @@ type ContextIssue struct {
 	Title      string `json:"title"`
 }
 
+// SkillSummary exposes only fields needed to identify a workspace Skill.
+// Skill bodies and configuration remain private to the normal Skill API.
+type SkillSummary struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type SkillListResponse struct {
+	Skills []SkillSummary `json:"skills"`
+}
+
 // Issue intentionally mirrors the fields already exposed by Plugin API v1,
 // but is independent from handler.IssueResponse. Adding an App API field can
 // therefore no longer widen the public contract by accident.

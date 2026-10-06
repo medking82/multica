@@ -12,6 +12,7 @@ const BasePath = "/v1"
 
 const (
 	PathContext       = "/context"
+	PathSkills        = "/skills"
 	PathIssue         = "/issues/{issue_ref}"
 	PathIssueComments = "/issues/{issue_ref}/comments"
 	PathStorageScope  = "/storage/{scope}"
@@ -56,6 +57,7 @@ var pluginRateLimits = []RateLimitProfile{RateLimitPluginStrict}
 
 var Operations = []Operation{
 	{Method: http.MethodGet, Path: PathContext, Contract: ContractPluginExtension, Policy: OperationPolicy{Credentials: pluginCredentials, Risk: RiskRead, Audit: AuditNotRequired, RateLimits: pluginRateLimits}},
+	{Method: http.MethodGet, Path: PathSkills, Contract: ContractSharedResource, Policy: OperationPolicy{Credentials: sharedCredentials, Scope: "skills:read", Risk: RiskRead, Audit: AuditPlanned, RateLimits: sharedRateLimits}},
 	{Method: http.MethodGet, Path: PathIssue, Contract: ContractSharedResource, Policy: OperationPolicy{Credentials: sharedCredentials, Scope: "issues:read", Risk: RiskRead, Audit: AuditPlanned, RateLimits: sharedRateLimits}},
 	{Method: http.MethodPatch, Path: PathIssue, Contract: ContractSharedResource, Policy: OperationPolicy{Credentials: sharedCredentials, Scope: "issues:write", Risk: RiskContentWrite, Audit: AuditPlanned, RateLimits: sharedRateLimits}},
 	{Method: http.MethodGet, Path: PathIssueComments, Contract: ContractSharedResource, Policy: OperationPolicy{Credentials: sharedCredentials, Scope: "comments:read", Risk: RiskRead, Audit: AuditPlanned, RateLimits: sharedRateLimits}},

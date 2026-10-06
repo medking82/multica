@@ -1,0 +1,29 @@
+{
+  "manifest_version": 1,
+  "key": "ai.multica.composer-skills",
+  "name": "Workspace Skill Picker",
+  "description": "Find a workspace Skill and insert its marker into the current draft.",
+  "version": "1.0.0",
+  "author": { "name": "multica", "url": "https://multica.ai" },
+  "scopes": ["skills:read"],
+  "contributes": {
+    "surfaces": [
+      {
+        "key": "skill-picker",
+        "type": "modal",
+        "name": "Workspace Skills",
+        "entry": "ui/main.js",
+        "platforms": ["web", "desktop"]
+      }
+    ],
+    "composer_commands": [
+      {
+        "key": "skills",
+        "label": "skills",
+        "description": "Pick a workspace Skill",
+        "contexts": ["chat", "issue_comment", "issue_reply", "issue_create", "agent_create"],
+        "surface": "skill-picker"
+      }
+    ]
+  }
+}

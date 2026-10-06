@@ -269,6 +269,8 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
           currentIssueId={issueId}
           attachments={pendingAttachments}
           enableSlashCommands
+          pluginComposerContext="issue_comment"
+          pluginIssueId={issueId}
           slashCommandMode="command"
           quickActionMenu={quickActionMenu}
         />
